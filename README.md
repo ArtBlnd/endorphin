@@ -1,5 +1,4 @@
 # Endorphin
------------
 ### Key-Value based in-memory cache library.
 
 ## About Endorphin
