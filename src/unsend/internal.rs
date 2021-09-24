@@ -1,4 +1,4 @@
-use crate::unsync::{ Tick, ValueEntry, TTLTracer };
+use crate::unsend::{ Tick, ValueEntry, TTLTracer };
 
 use hashbrown::HashMap;
 use std::hash::Hash;
