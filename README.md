@@ -1,8 +1,8 @@
 # Endorphin
 ----------------
+Key-Value based in-memory cache library.
 
-## In-memory Key-Value Cache Library
-
+## About Endorphin
 endorphin provides in memory Key-Value cache with TTL based expiration policy. like other cache crate. cached, lru_cache etc 
 
 ## Difference between other cache crate.
