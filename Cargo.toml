@@ -1,0 +1,9 @@
+[package]
+name = "endorphin"
+version = "0.1.0"
+edition = "2018"
+
+[dependencies]
+rand = "*"
+rayon = "*"
+hashbrown = { version = "*", features = ["rayon"]}
