@@ -68,38 +68,3 @@ where
         self.base_mut().get_mut(key)
     }
 }
-
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    use std::time::Instant;
-    use std::collections::HashMap;
-
-    #[test]
-    pub fn test1() {
-        let mut cache = UnsyncCache::new();
-
-        let now1 = Instant::now();
-        for i in 0..10000000 {
-            cache.insert(i, "hello!".to_string(), Duration::from_millis(100));
-        }
-        let now2 = Instant::now();
-
-        println!("{:?}", now2 - now1);
-    }
-
-    #[test]
-    pub fn test2() {
-        let mut cache = HashMap::new();
-
-        let now1 = Instant::now();
-        for i in 0..10000000 {
-            cache.insert(i, "hello!".to_string());
-        }
-        let now2 = Instant::now();
-
-        println!("{:?}", now2 - now1);
-    }
-}
