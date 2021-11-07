@@ -10,6 +10,8 @@ pub enum Status {
     ExpiredVec(Vec<EntryId>),
     // Everything is good. Seems all entry is alive!
     Alive,
+    // Try shrink the table.
+    TryShrink,
 }
 
 pub trait ExpirePolicy {
