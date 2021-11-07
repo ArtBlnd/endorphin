@@ -19,7 +19,7 @@ where
 {
     exp_bucket_table: BucketIdTable<(K, V, Storage<P::Storage>)>,
     exp_policy: P,
-    exp_values: RwLock<Vec<EntryId>>,
+    exp_backlog: RwLock<Vec<EntryId>>,
 
     hash_builder: H,
     table: RawTable<(K, V, Storage<P::Storage>)>,
@@ -36,7 +36,7 @@ where
         Self {
             exp_bucket_table: BucketIdTable::with_capacity(table.capacity()),
             exp_policy: policy,
-            exp_values: RwLock::new(Vec::new()),
+            exp_backlog: RwLock::new(Vec::new()),
 
             hash_builder: H::default(),
             table,
@@ -56,7 +56,7 @@ where
         hash: u64,
         v: (K, V, Storage<P::Storage>),
     ) -> Bucket<(K, V, Storage<P::Storage>)> {
-        let expired_values = self.exp_values.get_mut();
+        let expired_values = self.exp_backlog.get_mut();
 
         let v = if !expired_values.is_empty() {
             // try remove expired items.
@@ -106,6 +106,10 @@ where
             }
             Status::ExpiredVec(mut id_list) => {
                 mem::swap(&mut expired_values, &mut id_list);
+            }
+
+            Status::TryShrink => {
+
             }
 
             // there is nothing to expire.
