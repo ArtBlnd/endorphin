@@ -1,3 +1,6 @@
+mod lazy_fixed_ttl_policy;
+pub use lazy_fixed_ttl_policy::*;
+
 use crate::EntryId;
 
 pub enum Status {
@@ -15,15 +18,10 @@ pub trait ExpirePolicy {
 
     fn init_storage(&self, info: Self::Info) -> Self::Storage;
 
-    fn on_insert(&self, entry: EntryId, storage: &mut Self::Storage) -> Status {
-        Status::Alive
-    }
+    fn clear(&self);
 
-    fn on_access(&self, entry: EntryId, storage: &mut Self::Storage) -> Status {
-        Status::Alive
-    }
-
-    fn on_remove(&self, entry: EntryId, storage: &mut Self::Storage) -> Status {
-        Status::Alive
-    }
+    fn on_access(&self, entry: EntryId, storage: &mut Self::Storage) -> Status;
+    fn on_insert(&self, entry: EntryId, storage: &mut Self::Storage) -> Status;
+    fn on_remove(&self, entry: EntryId, storage: &mut Self::Storage) -> Status;
+    fn on_resize(&self) -> Status;
 }

@@ -7,7 +7,7 @@ mod map;
 pub use map::*;
 mod set;
 pub use set::*;
-mod policy;
-pub use policy::*;
 mod entry;
 pub use entry::*;
+
+pub mod policy;

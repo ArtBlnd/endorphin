@@ -1,11 +1,11 @@
 use crate::hash::*;
+use crate::policy::{ExpirePolicy, Status};
 use crate::storage::Storage;
-use crate::{BucketIdTable, EntryId, ExpirePolicy, Status};
+use crate::{BucketIdTable, EntryId};
 
 // hashbrown internals.
 use hashbrown::hash_map::DefaultHashBuilder;
 use hashbrown::raw::{Bucket, RawTable};
-use hashbrown::HashMap as HashHash;
 
 use std::borrow::Borrow;
 use std::hash::{BuildHasher, Hash};
@@ -17,12 +17,12 @@ struct HashMap<K, V, P, H = DefaultHashBuilder>
 where
     P: ExpirePolicy,
 {
-    pub(crate) exp_bucket_table: BucketIdTable<(K, V, Storage<P::Storage>)>,
-    pub(crate) exp_policy: P,
-    pub(crate) exp_values: RwLock<Vec<EntryId>>,
+    exp_bucket_table: BucketIdTable<(K, V, Storage<P::Storage>)>,
+    exp_policy: P,
+    exp_values: RwLock<Vec<EntryId>>,
 
-    pub(crate) hash_builder: H,
-    pub(crate) table: RawTable<(K, V, Storage<P::Storage>)>,
+    hash_builder: H,
+    table: RawTable<(K, V, Storage<P::Storage>)>,
 }
 
 impl<K, V, P, H> HashMap<K, V, P, H>
@@ -59,7 +59,7 @@ where
         let expired_values = self.exp_values.get_mut();
 
         let v = if !expired_values.is_empty() {
-            // try insert something if some values has been expired.
+            // try remove expired items.
             for entry_id in expired_values.drain(..) {
                 let bucket = self.exp_bucket_table.release_id(entry_id).unwrap();
                 unsafe {
@@ -67,6 +67,7 @@ where
                 }
             }
 
+            // try insert again, if fails we need to extend inner table.
             match self.table.try_insert_no_grow(hash, v) {
                 Ok(bucket) => return bucket,
                 Err(v) => v,
@@ -75,11 +76,49 @@ where
             v
         };
 
-        // seems there is no capacity left on table.
-        // extend capacity and recalcalulate id to bucket table.
-        
+        // TODO: Fork hashbrown and make internal resize method visible.
+        // and replace reserve method not to reiterate over to remap entry_id and bucket.
 
-        todo!();
+        // seems there is no capacity left on table.
+        // extend capacity and recalcalulate ids in bucket table.
+        let hasher = make_hasher::<K, _, V, Storage<P::Storage>, H>(&self.hash_builder);
+        self.table.reserve(self.table.capacity() / 2, hasher);
+
+        unsafe {
+            // update entry id in bucket table.
+            for bucket in self.table.iter() {
+                let (_, _, s) = bucket.as_mut();
+                self.exp_bucket_table.set_bucket(s.entry_id, bucket);
+            }
+        }
+
+        // we know we have enough size to insert.
+        self.table.insert_no_grow(hash, v)
+    }
+
+    fn handle_status(&self, status: Status) {
+        let mut expired_values = Vec::new();
+        match status {
+            // We do lazy expiration on get operation to keep get operation not to require mutablity.
+            // also for cache friendly.
+            Status::Expired(id) => {
+                expired_values.push(id);
+            }
+            Status::ExpiredVec(mut id_list) => {
+                mem::swap(&mut expired_values, &mut id_list);
+            }
+
+            // there is nothing to expire.
+            Status::Alive => return,
+        }
+
+        expired_values.iter().for_each(|v| {
+            let bucket = self.exp_bucket_table.get(*v);
+            let (_, _, s) = unsafe { bucket.as_ref() };
+
+            // set bucket marked as expired.
+            s.mark_expired();
+        })
     }
 
     pub fn get<Q: ?Sized>(&self, k: &Q) -> Option<&V>
@@ -95,19 +134,37 @@ where
 
         // fire on_insert event.
         let (_, v, s) = unsafe { bucket.as_mut() };
-        match self.exp_policy.on_access(s.entry_id, &mut s.storage) {
-            // We do lazy expiration on get operation to keep get operation not to require mutablity.
-            // also for cache friendly.
-            Status::Expired(id) => {
-                self.exp_values.write().push(id);
-            }
-            Status::ExpiredVec(id_list) => {
-                self.exp_values.write().extend_from_slice(&id_list);
-            }
-            Status::Alive => {}
-        }
+        self.handle_status(self.exp_policy.on_access(s.entry_id, &mut s.storage));
 
-        return Some(v);
+        // don't give access to entry if entry expired.
+        if s.expired() {
+            None
+        } else {
+            Some(v)
+        }
+    }
+
+    pub fn get_mut<Q: ?Sized>(&self, k: &Q) -> Option<&mut V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq,
+    {
+        let hash = make_hash::<K, Q, H>(&self.hash_builder, &k);
+        let bucket = match self.table.find(hash, equivalent_key(k)) {
+            Some(bucket) => bucket,
+            None => return None,
+        };
+
+        // fire on_insert event.
+        let (_, v, s) = unsafe { bucket.as_mut() };
+        self.handle_status(self.exp_policy.on_access(s.entry_id, &mut s.storage));
+
+        // don't give access to entry if entry expired.
+        if s.expired() {
+            None
+        } else {
+            Some(v)
+        }
     }
 
     pub fn insert(&mut self, k: K, v: V, init: P::Info) -> Option<V> {
@@ -121,10 +178,8 @@ where
                 inner_s.storage = s;
                 return Some(mem::replace(inner_v, v));
             } else {
-                let storage = Storage {
-                    storage: s,
-                    entry_id: self.exp_bucket_table.acquire_id(),
-                };
+                // crate a new entry storage.
+                let storage = Storage::new(s, self.exp_bucket_table.acquire_id());
 
                 match self.table.try_insert_no_grow(hash, (k, v, storage)) {
                     Ok(bucket) => bucket,
@@ -133,23 +188,9 @@ where
             };
 
         let (_, _, s) = unsafe { bucket.as_mut() };
-        self.exp_bucket_table.register_bucket(s.entry_id, bucket);
+        self.exp_bucket_table.set_bucket(s.entry_id, bucket);
 
-        // fire on_insert event.
-        match self.exp_policy.on_insert(s.entry_id, &mut s.storage) {
-            Status::Expired(id) => {
-                let bucket = self.exp_bucket_table.release_id(id).unwrap();
-                unsafe { self.table.erase(bucket) };
-            }
-            Status::ExpiredVec(id_list) => {
-                id_list.into_iter().for_each(|id| {
-                    let bucket = self.exp_bucket_table.release_id(id).unwrap();
-                    unsafe { self.table.erase(bucket) };
-                });
-            }
-            Status::Alive => {}
-        }
-
+        self.handle_status(self.exp_policy.on_insert(s.entry_id, &mut s.storage));
         return None;
     }
 }

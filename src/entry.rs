@@ -6,6 +6,7 @@ use ringbuffer::{RingBufferExt, RingBufferRead, RingBufferWrite};
 use std::mem;
 
 pub type EntryId = usize;
+const ENTRY_TOMBSTONE: EntryId = 0xFFFFFFFF;
 
 pub(crate) struct BucketIdTable<B> {
     table: Box<[Option<Bucket<B>>]>,
@@ -37,7 +38,7 @@ impl<B> BucketIdTable<B> {
         id
     }
 
-    pub fn register_bucket(&mut self, id: EntryId, bucket: Bucket<B>) {}
+    pub fn set_bucket(&mut self, id: EntryId, bucket: Bucket<B>) {}
 
     pub fn release_with_bucket(&mut self, bucket: Bucket<B>) {
         for item in self.table.iter_mut().filter(|v| v.is_none()) {
