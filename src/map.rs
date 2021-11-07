@@ -84,8 +84,10 @@ where
         let hasher = make_hasher::<K, _, V, Storage<P::Storage>, H>(&self.hash_builder);
         self.table.reserve(self.table.capacity() / 2, hasher);
 
+        // clear table and resize it.
+        self.exp_bucket_table.clear_table_and_resize(self.table.capacity());
         unsafe {
-            // update entry id in bucket table.
+            // re-init id to bucket mapping on bucket table.
             for bucket in self.table.iter() {
                 let (_, _, s) = bucket.as_mut();
                 self.exp_bucket_table.set_bucket(s.entry_id, bucket);
@@ -196,5 +198,22 @@ where
 
         self.handle_status(self.exp_policy.on_insert(s.entry_id, &mut s.storage));
         return None;
+    }
+}
+
+impl<K, V, P, H> HashMap<K, V, P, H>
+where
+    P: ExpirePolicy
+{
+    pub fn clear(&mut self) {
+        self.table.clear();
+
+        self.exp_backlog.get_mut().clear();
+        self.exp_policy.clear();
+        self.exp_bucket_table.clear();
+    }
+
+    pub fn len(&self) -> usize {
+        self.table.len()
     }
 }
