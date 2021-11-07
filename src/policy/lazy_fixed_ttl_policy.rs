@@ -1,4 +1,5 @@
 use crate::policy::{ExpirePolicy, Status};
+use crate::EntryId;
 
 use std::time::{Duration, Instant};
 
@@ -22,7 +23,7 @@ impl ExpirePolicy for LazyFixedTTLPolicy {
 
     fn clear(&self) {}
 
-    fn on_access(&self, entry: crate::EntryId, storage: &mut Self::Storage) -> Status {
+    fn on_access(&self, entry: EntryId, storage: &mut Self::Storage) -> Status {
         if *storage > Instant::now() {
             Status::Expired(entry)
         } else {
@@ -30,11 +31,11 @@ impl ExpirePolicy for LazyFixedTTLPolicy {
         }
     }
 
-    fn on_insert(&self, _: crate::EntryId, _: &mut Self::Storage) -> Status {
+    fn on_insert(&self, _:EntryId, _: &mut Self::Storage) -> Status {
         Status::Alive
     }
 
-    fn on_remove(&self, _: crate::EntryId, _: &mut Self::Storage) -> Status {
+    fn on_remove(&self, _: EntryId, _: &mut Self::Storage) -> Status {
         Status::Alive
     }
 
