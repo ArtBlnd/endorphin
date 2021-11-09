@@ -19,5 +19,5 @@ cache.get("expired_after").is_none(); // true
 Currently, we provide two pre-defined policies. `LazyFixedTTLPolicy` and `TTLPolicy` we'll make more on future release
 
 
-'LazyFixedTTLPolicy' uses **Lazy Expiration** which is like other cache crates. `cached`, `ttl_cache` which expire items when you access it after expired.  
+`LazyFixedTTLPolicy` uses **Lazy Expiration** which is like other cache crates. `cached`, `ttl_cache` which expire items when you access it after expired.  
 `TTLPolicy` uses **Active Expiration** which expires even you don't access to expired entries.
