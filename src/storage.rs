@@ -19,11 +19,11 @@ impl<S> Storage<S> {
         }
     }
 
-    pub fn mark_expired(&self) {
+    pub fn mark_as_removed(&self) {
         self.is_expired.store(true, Ordering::Release);
     }
 
-    pub fn expired(&self) -> bool {
+    pub fn is_removed(&self) -> bool {
         self.is_expired.load(Ordering::Acquire)
     }
 }

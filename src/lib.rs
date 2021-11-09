@@ -1,5 +1,6 @@
 // for internal use.
 pub(crate) mod hash;
+pub(crate) mod instrinsic;
 pub(crate) mod storage;
 
 // for external use.
