@@ -1,5 +1,5 @@
 use crate::instrinsic::*;
-use crate::policy::{ExpirePolicy, Status};
+use crate::policy::{ExpirePolicy, Command};
 use crate::{EntryId, ENTRY_TOMBSTONE};
 
 use std::collections::BTreeMap;
@@ -41,12 +41,12 @@ impl ExpirePolicy for TTLPolicy {
         *expire_at > Instant::now()
     }
 
-    fn on_access(&self, entry: EntryId, expire_at: &mut Self::Storage) -> Status {
+    fn on_access(&self, entry: EntryId, expire_at: &mut Self::Storage) -> Command {
         {
             let now = Instant::now();
             let ttl_latest_check = self.ttl_latest_check.upgradable_read();
             if *ttl_latest_check + self.presision < now {
-                return Status::Alive;
+                return Command::Noop;
             }
 
             *RwLockUpgradableReadGuard::upgrade(ttl_latest_check) = now;
@@ -57,27 +57,27 @@ impl ExpirePolicy for TTLPolicy {
         let expires_at = if let Some(v) = records.keys().cloned().next() {
             v
         } else {
-            return Status::Alive;
+            return Command::Noop;
         };
 
         // target entry did not expired yet.
         if expires_at > Instant::now() {
-            return Status::Alive;
+            return Command::Noop;
         }
 
-        Status::RemoveBulk(records.remove(&expires_at).unwrap())
+        Command::RemoveBulk(records.remove(&expires_at).unwrap())
     }
 
-    fn on_insert(&self, entry: EntryId, expire_at: &mut Self::Storage) -> Status {
+    fn on_insert(&self, entry: EntryId, expire_at: &mut Self::Storage) -> Command {
         let slot = align_instant(*expire_at, self.presision);
 
         let mut ttl_records = self.ttl_records.write();
         ttl_records.entry(slot).or_insert(Vec::new()).push(entry);
 
-        Status::Alive
+        Command::Noop
     }
 
-    fn on_remove(&self, entry: EntryId, expire_at: &mut Self::Storage) -> Status {
+    fn on_remove(&self, entry: EntryId, expire_at: &mut Self::Storage) -> Command {
         let slot = align_instant(*expire_at, self.presision);
 
         let mut ttl_records = self.ttl_records.write();
@@ -87,14 +87,14 @@ impl ExpirePolicy for TTLPolicy {
             }
 
             *record = ENTRY_TOMBSTONE;
-            return Status::Alive;
+            return Command::Noop;
         }
 
         unreachable!();
     }
 
-    fn on_resize(&self) -> Status {
-        Status::Alive
+    fn on_resize(&self) -> Command {
+        Command::Noop
     }
 }
 

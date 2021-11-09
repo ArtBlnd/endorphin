@@ -1,4 +1,4 @@
-use crate::policy::{ExpirePolicy, Status};
+use crate::policy::{ExpirePolicy, Command};
 use crate::EntryId;
 
 use std::time::{Duration, Instant};
@@ -27,23 +27,23 @@ impl ExpirePolicy for LazyFixedTTLPolicy {
         *storage > Instant::now()
     }
 
-    fn on_access(&self, entry: EntryId, storage: &mut Self::Storage) -> Status {
+    fn on_access(&self, entry: EntryId, storage: &mut Self::Storage) -> Command {
         if *storage > Instant::now() {
-            Status::Remove(entry)
+            Command::Remove(entry)
         } else {
-            Status::Alive
+            Command::Noop
         }
     }
 
-    fn on_insert(&self, _: EntryId, _: &mut Self::Storage) -> Status {
-        Status::Alive
+    fn on_insert(&self, _: EntryId, _: &mut Self::Storage) -> Command {
+        Command::Noop
     }
 
-    fn on_remove(&self, _: EntryId, _: &mut Self::Storage) -> Status {
-        Status::Alive
+    fn on_remove(&self, _: EntryId, _: &mut Self::Storage) -> Command {
+        Command::Noop
     }
 
-    fn on_resize(&self) -> Status {
-        Status::Alive
+    fn on_resize(&self) -> Command {
+        Command::Noop
     }
 }

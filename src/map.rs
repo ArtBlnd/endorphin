@@ -1,5 +1,5 @@
 use crate::hash::*;
-use crate::policy::{ExpirePolicy, Status};
+use crate::policy::{ExpirePolicy, Command};
 use crate::storage::Storage;
 use crate::{BucketIdTable, EntryId, ENTRY_TOMBSTONE};
 
@@ -105,16 +105,16 @@ where
     }
 
     #[inline]
-    fn handle_status(&self, status: Status) {
+    fn handle_status(&self, status: Command) {
         let mut expired_values = Vec::new();
         match status {
             // We do lazy expiration on get operation to keep get operation not to require mutablity.
             // also for cache friendly.
-            Status::Remove(id) => expired_values.push(id),
-            Status::RemoveBulk(mut id_list) => mem::swap(&mut expired_values, &mut id_list),
-            Status::TryShrink => unimplemented!("shrinking table is not supported yet!"),
+            Command::Remove(id) => expired_values.push(id),
+            Command::RemoveBulk(mut id_list) => mem::swap(&mut expired_values, &mut id_list),
+            Command::TryShrink => unimplemented!("shrinking table is not supported yet!"),
             // there is nothing to expire.
-            Status::Alive => return,
+            Command::Noop => return,
         }
 
         expired_values.iter().cloned().for_each(|v| {

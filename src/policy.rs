@@ -5,13 +5,13 @@ pub use ttl_policy::*;
 
 use crate::EntryId;
 
-pub enum Status {
+pub enum Command {
     // Single entry has been expired.
     Remove(EntryId),
     // Some entry has been expired.
     RemoveBulk(Vec<EntryId>),
     // Everything is good. Seems all entry is alive!
-    Alive,
+    Noop,
     // Try shrink the table.
     TryShrink,
 }
@@ -26,8 +26,8 @@ pub trait ExpirePolicy {
 
     fn is_expired(&self, entry: EntryId, storage: &mut Self::Storage) -> bool;
 
-    fn on_access(&self, entry: EntryId, storage: &mut Self::Storage) -> Status;
-    fn on_insert(&self, entry: EntryId, storage: &mut Self::Storage) -> Status;
-    fn on_remove(&self, entry: EntryId, storage: &mut Self::Storage) -> Status;
-    fn on_resize(&self) -> Status;
+    fn on_access(&self, entry: EntryId, storage: &mut Self::Storage) -> Command;
+    fn on_insert(&self, entry: EntryId, storage: &mut Self::Storage) -> Command;
+    fn on_remove(&self, entry: EntryId, storage: &mut Self::Storage) -> Command;
+    fn on_resize(&self) -> Command;
 }
