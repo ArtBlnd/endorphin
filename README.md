@@ -1,5 +1,5 @@
 # Endorphin
-> Key-Value based in-memory cache library which supports **Custom Expiration Policies** and same interface as standard HashMap and HashSet.
+> Key-Value based in-memory cache library which supports **Custom Expiration Policies** with standard HashMap, HashSet interface.
 
 ```
 use endorphin::HashMap;
