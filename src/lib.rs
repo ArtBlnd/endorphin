@@ -1,8 +1,14 @@
-mod error;
-pub use error::*;
+// for internal use.
+pub(crate) mod hash;
+pub(crate) mod instrinsic;
+pub(crate) mod storage;
 
-// cache types
-mod unsend;
-pub use unsend::UnsyncCache;
+// for external use.
+mod map;
+pub use map::*;
+mod set;
+pub use set::*;
+mod entry;
+pub use entry::*;
 
-pub(crate) mod housekeeper;
+pub mod policy;
