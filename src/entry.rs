@@ -14,7 +14,7 @@ pub(crate) struct EntryIdTable<B> {
 impl<B> EntryIdTable<B> {
     pub fn new() -> Self {
         Self {
-            table: SlotMap::with_key(),
+            table: SlotMap::with_key()
         }
     }
 
@@ -27,11 +27,15 @@ impl<B> EntryIdTable<B> {
     }
 
     pub fn set_bucket(&mut self, slot: EntryId, bucket: Option<Bucket<B>>) {
+        if bucket.is_none() {
+            println!("{:?}", slot);
+        }
+
         *self.table.get_mut(slot).unwrap() = bucket;
     }
 
-    pub fn get(&self, id: EntryId) -> Bucket<B> {
-        self.table.get(id).cloned().unwrap().unwrap()
+    pub fn get(&self, id: EntryId) -> Option<Bucket<B>> {
+        self.table.get(id).cloned().unwrap()
     }
 
     pub fn clear(&mut self) {

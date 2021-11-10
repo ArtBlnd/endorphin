@@ -15,7 +15,11 @@ pub struct TTLPolicy {
 }
 
 impl TTLPolicy {
-    pub fn new(presision: Duration) -> Self {
+    pub fn new() -> Self {
+        Self::with_presision(Duration::from_millis(1))
+    }
+
+    pub fn with_presision(presision: Duration) -> Self {
         Self {
             ttl_records: RwLock::new(BTreeMap::new()),
             ttl_latest_check: RwLock::new(Instant::now()),
@@ -38,14 +42,14 @@ impl ExpirePolicy for TTLPolicy {
     }
 
     fn is_expired(&self, entry: EntryId, expire_at: &mut Self::Storage) -> bool {
-        *expire_at > Instant::now()
+        *expire_at < Instant::now()
     }
 
     fn on_access(&self, entry: EntryId, expire_at: &mut Self::Storage) -> Command {
+        let now = Instant::now();
         {
-            let now = Instant::now();
             let ttl_latest_check = self.ttl_latest_check.upgradable_read();
-            if *ttl_latest_check + self.presision < now {
+            if *ttl_latest_check + self.presision > now {
                 return Command::Noop;
             }
 
@@ -54,30 +58,31 @@ impl ExpirePolicy for TTLPolicy {
 
         // if target entry did not expired yet...
         let mut records = self.ttl_records.write();
-        let expires_at = if let Some(v) = records.keys().cloned().next() {
-            v
+        let expires_at = if let Some(v) = records.keys().next() {
+            v.clone()
         } else {
             return Command::Noop;
         };
 
         // target entry did not expired yet.
-        if expires_at > Instant::now() {
+        if expires_at > now {
             return Command::Noop;
         }
-
+        
         Command::RemoveBulk(records.remove(&expires_at).unwrap())
     }
 
     fn on_insert(&self, entry: EntryId, expire_at: &mut Self::Storage) -> Command {
         let slot = align_instant(*expire_at, self.presision);
+        {
+            let mut ttl_records = self.ttl_records.write();
+            ttl_records
+                .entry(slot)
+                .or_insert(Vec::new())
+                .push(Some(entry));
+        }
 
-        let mut ttl_records = self.ttl_records.write();
-        ttl_records
-            .entry(slot)
-            .or_insert(Vec::new())
-            .push(Some(entry));
-
-        Command::Noop
+        self.on_access(entry, expire_at)
     }
 
     fn on_resize(&self) -> Command {
@@ -90,13 +95,12 @@ fn align_instant(instant: Instant, by: Duration) -> Instant {
     static BASE: Lazy<Instant> = Lazy::new(|| Instant::now());
 
     let v = *BASE;
-    let offs = if likely(v > instant) {
+    let mx = if likely(v > instant) {
         let offs = v - instant;
-        by.as_micros() - (offs.as_micros() % by.as_micros())
+        offs.as_millis() / by.as_millis() + 1
     } else {
-        let offs = instant - v;
-        offs.as_micros() % by.as_micros()
+        return v;
     };
 
-    instant + Duration::from_micros(offs as u64)
+    v + Duration::from_millis((by.as_millis() * mx) as u64)
 }

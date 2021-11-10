@@ -14,7 +14,7 @@ use std::mem;
 
 use crossbeam::queue::SegQueue;
 
-struct HashMap<K, V, P, H = DefaultHashBuilder>
+pub struct HashMap<K, V, P, H = DefaultHashBuilder>
 where
     P: ExpirePolicy,
 {
@@ -26,10 +26,9 @@ where
     table: RawTable<(K, V, Storage<P::Storage>)>,
 }
 
-impl<K, V, P, H> HashMap<K, V, P, H>
+impl<K, V, P> HashMap<K, V, P, DefaultHashBuilder>
 where
     P: ExpirePolicy,
-    H: Default,
 {
     pub fn new(policy: P) -> Self {
         let table = RawTable::new();
@@ -39,7 +38,7 @@ where
             exp_policy: policy,
             exp_backlog: SegQueue::new(),
 
-            hash_builder: H::default(),
+            hash_builder: DefaultHashBuilder::default(),
             table,
         }
     }
@@ -106,7 +105,7 @@ where
         // seems there is no capacity left on table.
         // extend capacity and recalcalulate ids in bucket table.
         let hasher = make_hasher::<K, _, V, Storage<P::Storage>, H>(&self.hash_builder);
-        self.table.reserve(self.table.capacity() / 2, hasher);
+        self.table.reserve((self.table.capacity() + 1) * 2, hasher);
 
         unsafe {
             // update id to bucket mapping on bucket table.
@@ -134,11 +133,12 @@ where
         }
 
         removed.iter().cloned().filter_map(|v| v).for_each(|v| {
-            let bucket = self.exp_bucket_table.get(v);
-            let (_, _, s) = unsafe { bucket.as_ref() };
+            if let Some(bucket) = self.exp_bucket_table.get(v) {
+                let (_, _, s) = unsafe { bucket.as_ref() };
 
-            // set bucket marked as expired.
-            s.mark_as_removed();
+                // set bucket marked as expired.
+                s.mark_as_removed();
+            }
         });
 
         self.exp_backlog.push(removed);
@@ -205,7 +205,7 @@ where
 
         let (bucket, old_v) =
             if let Some((_, old_v, old_s)) = self.table.get_mut(hash, equivalent_key(&k)) {
-                let bucket = self.exp_bucket_table.get(old_s.entry_id);
+                let bucket = self.exp_bucket_table.get(old_s.entry_id).unwrap();
 
                 // we need to mark it as removed. but not releasing id.
                 // and assign a new id to track it.
@@ -270,5 +270,26 @@ where
     #[inline]
     pub fn len(&self) -> usize {
         self.table.len()
+    }
+}
+
+#[cfg(test)]
+mod testing {
+    use crate::*;
+
+    use std::time::{Duration, Instant};
+    use std::thread::sleep;
+
+    #[test]
+    fn test1() {
+        let mut cache = HashMap::new(policy::TTLPolicy::new());
+
+        let i1 = Instant::now();
+        for i in 0..1000000 {
+            cache.insert(i, "10ms", Duration::from_millis(1000));
+        }
+        let i2 = Instant::now();
+
+        println!("{:?}", i2 - i1);
     }
 }
