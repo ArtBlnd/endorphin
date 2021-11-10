@@ -3,7 +3,7 @@ use crate::EntryId;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 
-pub(crate) struct Storage<S> {
+pub struct Storage<S> {
     pub(crate) storage: S,
     pub(crate) entry_id: EntryId,
 
