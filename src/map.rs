@@ -6,7 +6,6 @@ use crate::{EntryId, EntryIdTable};
 
 // hashbrown internals.
 use hashbrown::hash_map::DefaultHashBuilder;
-use hashbrown::hash_map::HashMap as H;
 use hashbrown::raw::{Bucket, RawIter, RawTable};
 
 use std::borrow::Borrow;
