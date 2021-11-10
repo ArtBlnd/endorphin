@@ -26,6 +26,22 @@ where
     table: RawTable<(K, V, Storage<P::Storage>)>,
 }
 
+unsafe impl<K, V, P, H> Sync for HashMap<K, V, P, H>
+where
+    P: ExpirePolicy,
+    K: Sync,
+    V: Sync,
+{
+}
+
+unsafe impl<K, V, P, H> Send for HashMap<K, V, P, H>
+where
+    P: ExpirePolicy,
+    K: Send,
+    V: Send,
+{
+}
+
 impl<K, V, P> HashMap<K, V, P, DefaultHashBuilder>
 where
     P: ExpirePolicy,
@@ -105,7 +121,8 @@ where
         // seems there is no capacity left on table.
         // extend capacity and recalcalulate ids in bucket table.
         let hasher = make_hasher::<K, _, V, Storage<P::Storage>, H>(&self.hash_builder);
-        self.table.reserve((self.table.capacity() + 1) * 3 / 2, hasher);
+        self.table
+            .reserve((self.table.capacity() + 1) * 3 / 2, hasher);
 
         unsafe {
             // update id to bucket mapping on bucket table.

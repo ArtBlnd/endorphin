@@ -68,7 +68,7 @@ impl ExpirePolicy for TTLPolicy {
         if expires_at > now {
             return Command::Noop;
         }
-        
+
         Command::RemoveBulk(records.remove(&expires_at).unwrap())
     }
 

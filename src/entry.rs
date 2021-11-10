@@ -14,7 +14,7 @@ pub(crate) struct EntryIdTable<B> {
 impl<B> EntryIdTable<B> {
     pub fn new() -> Self {
         Self {
-            table: SlotMap::with_key()
+            table: SlotMap::with_key(),
         }
     }
 
