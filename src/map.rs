@@ -272,23 +272,3 @@ where
         self.table.len()
     }
 }
-
-#[cfg(test)]
-mod testing {
-    use crate::*;
-
-    use std::time::{Duration, Instant};
-
-    #[test]
-    fn test1() {
-        let mut cache = HashMap::new(policy::TTLPolicy::new());
-
-        let i1 = Instant::now();
-        for i in 0..1000000 {
-            cache.insert(i, "10ms", Duration::from_millis(1000));
-        }
-        let i2 = Instant::now();
-
-        println!("{:?}", i2 - i1);
-    }
-}
