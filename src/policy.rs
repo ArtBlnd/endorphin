@@ -9,7 +9,7 @@ pub enum Command {
     // Single entry has been expired.
     Remove(EntryId),
     // Some entry has been expired.
-    RemoveBulk(Vec<EntryId>),
+    RemoveBulk(Vec<Option<EntryId>>),
     // Everything is good. Seems all entry is alive!
     Noop,
     // Try shrink the table.

@@ -1,4 +1,4 @@
-use crate::policy::{ExpirePolicy, Command};
+use crate::policy::{Command, ExpirePolicy};
 use crate::EntryId;
 
 use std::time::{Duration, Instant};

@@ -1,6 +1,6 @@
 use crate::instrinsic::*;
-use crate::policy::{ExpirePolicy, Command};
-use crate::{EntryId, ENTRY_TOMBSTONE};
+use crate::policy::{Command, ExpirePolicy};
+use crate::EntryId;
 
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
@@ -9,7 +9,7 @@ use parking_lot::RwLock;
 use parking_lot::RwLockUpgradableReadGuard;
 
 pub struct TTLPolicy {
-    ttl_records: RwLock<BTreeMap<Instant, Vec<EntryId>>>,
+    ttl_records: RwLock<BTreeMap<Instant, Vec<Option<EntryId>>>>,
     ttl_latest_check: RwLock<Instant>,
     presision: Duration,
 }
@@ -72,7 +72,10 @@ impl ExpirePolicy for TTLPolicy {
         let slot = align_instant(*expire_at, self.presision);
 
         let mut ttl_records = self.ttl_records.write();
-        ttl_records.entry(slot).or_insert(Vec::new()).push(entry);
+        ttl_records
+            .entry(slot)
+            .or_insert(Vec::new())
+            .push(Some(entry));
 
         Command::Noop
     }
@@ -82,11 +85,13 @@ impl ExpirePolicy for TTLPolicy {
 
         let mut ttl_records = self.ttl_records.write();
         for record in ttl_records.get_mut(&slot).unwrap() {
-            if *record == entry {
-                continue;
+            if let Some(record) = record {
+                if *record == entry {
+                    continue;
+                }
             }
 
-            *record = ENTRY_TOMBSTONE;
+            *record = None;
             return Command::Noop;
         }
 

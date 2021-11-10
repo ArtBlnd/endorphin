@@ -1,7 +1,8 @@
 use crate::hash::*;
-use crate::policy::{ExpirePolicy, Command};
+use crate::instrinsic::unlikely;
+use crate::policy::{Command, ExpirePolicy};
 use crate::storage::Storage;
-use crate::{BucketIdTable, EntryId, ENTRY_TOMBSTONE};
+use crate::{EntryId, EntryIdTable};
 
 // hashbrown internals.
 use hashbrown::hash_map::DefaultHashBuilder;
@@ -11,15 +12,15 @@ use std::borrow::Borrow;
 use std::hash::{BuildHasher, Hash};
 use std::mem;
 
-use parking_lot::RwLock;
+use crossbeam::queue::SegQueue;
 
 struct HashMap<K, V, P, H = DefaultHashBuilder>
 where
     P: ExpirePolicy,
 {
-    exp_bucket_table: BucketIdTable<(K, V, Storage<P::Storage>)>,
+    exp_bucket_table: EntryIdTable<(K, V, Storage<P::Storage>)>,
     exp_policy: P,
-    exp_backlog: RwLock<Vec<EntryId>>,
+    exp_backlog: SegQueue<Vec<Option<EntryId>>>,
 
     hash_builder: H,
     table: RawTable<(K, V, Storage<P::Storage>)>,
@@ -34,9 +35,9 @@ where
         let table = RawTable::new();
 
         Self {
-            exp_bucket_table: BucketIdTable::with_capacity(table.capacity()),
+            exp_bucket_table: EntryIdTable::new(),
             exp_policy: policy,
-            exp_backlog: RwLock::new(Vec::new()),
+            exp_backlog: SegQueue::new(),
 
             hash_builder: H::default(),
             table,
@@ -57,22 +58,22 @@ where
         hash: u64,
         v: (K, V, Storage<P::Storage>),
     ) -> Bucket<(K, V, Storage<P::Storage>)> {
-        let expired_values = self.exp_backlog.get_mut();
-
-        let v = if !expired_values.is_empty() {
-            // try remove expired items.
-            for entry_id in expired_values.drain(..) {
-                if entry_id == ENTRY_TOMBSTONE {
-                    continue;
-                }
-
-                let bucket = self.exp_bucket_table.release_id(entry_id).unwrap();
-                unsafe {
-                    self.table.remove(bucket);
+        let mut has_backlog = false;
+        while let Some(removed) = self.exp_backlog.pop() {
+            for entry_id in removed.into_iter().filter_map(|v| v) {
+                // bucket could already removed and its empty storage.
+                if let Some(bucket) = self.exp_bucket_table.release_slot(entry_id) {
+                    unsafe {
+                        self.table.remove(bucket);
+                    }
                 }
             }
 
-            // try insert again, if fails we need to extend inner table.
+            has_backlog |= true;
+        }
+
+        // try insert again, if fails we need to extend inner table.
+        let v = if has_backlog {
             match self.table.try_insert_no_grow(hash, v) {
                 Ok(bucket) => return bucket,
                 Err(v) => v,
@@ -89,14 +90,11 @@ where
         let hasher = make_hasher::<K, _, V, Storage<P::Storage>, H>(&self.hash_builder);
         self.table.reserve(self.table.capacity() / 2, hasher);
 
-        // clear table and resize it.
-        self.exp_bucket_table
-            .clear_table_and_resize(self.table.capacity());
         unsafe {
-            // re-init id to bucket mapping on bucket table.
+            // update id to bucket mapping on bucket table.
             for bucket in self.table.iter() {
                 let (_, _, s) = bucket.as_mut();
-                self.exp_bucket_table.set_bucket(s.entry_id, bucket);
+                self.exp_bucket_table.set_bucket(s.entry_id, Some(bucket));
             }
         }
 
@@ -106,25 +104,25 @@ where
 
     #[inline]
     fn handle_status(&self, status: Command) {
-        let mut expired_values = Vec::new();
+        let mut removed = Vec::new();
         match status {
             // We do lazy expiration on get operation to keep get operation not to require mutablity.
             // also for cache friendly.
-            Command::Remove(id) => expired_values.push(id),
-            Command::RemoveBulk(mut id_list) => mem::swap(&mut expired_values, &mut id_list),
+            Command::Remove(id) => removed.push(Some(id)),
+            Command::RemoveBulk(mut id_list) => mem::swap(&mut removed, &mut id_list),
             Command::TryShrink => unimplemented!("shrinking table is not supported yet!"),
             // there is nothing to expire.
             Command::Noop => return,
         }
 
-        expired_values.iter().cloned().for_each(|v| {
+        removed.iter().cloned().filter_map(|v| v).for_each(|v| {
             let bucket = self.exp_bucket_table.get(v);
             let (_, _, s) = unsafe { bucket.as_ref() };
 
             // set bucket marked as expired.
             s.mark_as_removed();
-            self.exp_backlog.write().push(v);
-        })
+        });
+        self.exp_backlog.push(removed);
     }
 
     #[inline]
@@ -144,7 +142,7 @@ where
         self.handle_status(self.exp_policy.on_access(s.entry_id, &mut s.storage));
 
         // don't give access to entry if entry expired.
-        if self.exp_policy.is_expired(s.entry_id, &mut s.storage) || s.is_removed() {
+        if self.exp_policy.is_expired(s.entry_id, &mut s.storage) || unlikely(s.is_removed()) {
             None
         } else {
             Some(v)
@@ -168,7 +166,7 @@ where
         self.handle_status(self.exp_policy.on_access(s.entry_id, &mut s.storage));
 
         // don't give access to entry if entry expired.
-        if self.exp_policy.is_expired(s.entry_id, &mut s.storage) || s.is_removed() {
+        if self.exp_policy.is_expired(s.entry_id, &mut s.storage) || unlikely(s.is_removed()) {
             None
         } else {
             Some(v)
@@ -177,30 +175,47 @@ where
 
     #[inline]
     pub fn insert(&mut self, k: K, v: V, init: P::Info) -> Option<V> {
+        let hash = make_insert_hash::<K, H>(&self.hash_builder, &k);
+
         // initialize storage with info value.
         let s = self.exp_policy.init_storage(init);
+        let storage = Storage::new(s, self.exp_bucket_table.acquire_slot());
 
-        // insert values into internal table.
-        let hash = make_insert_hash::<K, H>(&self.hash_builder, &k);
-        let bucket =
-            if let Some((_, inner_v, inner_s)) = self.table.get_mut(hash, equivalent_key(&k)) {
-                inner_s.storage = s;
-                return Some(mem::replace(inner_v, v));
+        let (bucket, old_v) =
+            if let Some((_, old_v, old_s)) = self.table.get_mut(hash, equivalent_key(&k)) {
+                let bucket = self.exp_bucket_table.get(old_s.entry_id);
+
+                // we need to mark it as removed. but not releasing id.
+                // and assign a new id to track it.
+                self.exp_bucket_table.set_bucket(old_s.entry_id, None);
+                self.exp_bucket_table
+                    .set_bucket(storage.entry_id, Some(bucket.clone()));
+
+                *old_s = storage;
+                (bucket, Some(mem::replace(old_v, v)))
             } else {
-                // crate a new entry storage.
-                let storage = Storage::new(s, self.exp_bucket_table.acquire_id());
-
-                match self.table.try_insert_no_grow(hash, (k, v, storage)) {
+                let bucket = match self.table.try_insert_no_grow(hash, (k, v, storage)) {
                     Ok(bucket) => bucket,
                     Err(v) => self.grow_and_insert(hash, v),
-                }
+                };
+
+                (bucket, None)
             };
 
         let (_, _, s) = unsafe { bucket.as_mut() };
-        self.exp_bucket_table.set_bucket(s.entry_id, bucket);
+        self.exp_bucket_table.set_bucket(s.entry_id, Some(bucket));
 
         self.handle_status(self.exp_policy.on_insert(s.entry_id, &mut s.storage));
-        return None;
+        return old_v;
+    }
+
+    #[inline]
+    pub fn remove<Q: ?Sized>(&mut self, k: &Q) -> Option<V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq,
+    {
+        todo!();
     }
 }
 
@@ -212,11 +227,11 @@ where
     pub fn clear(&mut self) {
         self.table.clear();
 
-        self.exp_backlog.get_mut().clear();
+        self.exp_backlog = SegQueue::new();
         self.exp_policy.clear();
         self.exp_bucket_table.clear();
     }
-    
+
     #[inline]
     pub fn len(&self) -> usize {
         self.table.len()
