@@ -105,7 +105,7 @@ where
         // seems there is no capacity left on table.
         // extend capacity and recalcalulate ids in bucket table.
         let hasher = make_hasher::<K, _, V, Storage<P::Storage>, H>(&self.hash_builder);
-        self.table.reserve((self.table.capacity() + 1) * 2, hasher);
+        self.table.reserve((self.table.capacity() + 1) * 3 / 2, hasher);
 
         unsafe {
             // update id to bucket mapping on bucket table.
@@ -278,7 +278,6 @@ mod testing {
     use crate::*;
 
     use std::time::{Duration, Instant};
-    use std::thread::sleep;
 
     #[test]
     fn test1() {
