@@ -14,7 +14,7 @@ where
 }
 
 #[cfg_attr(feature = "inline-more", inline)]
-pub(crate) fn equivalent_key<Q, K, V, S>(k: &Q) -> impl Fn(&(K, V, S)) -> bool + '_
+pub(crate) fn equivalent_key<Q, K, V, S>(k: &Q) -> impl Fn(&(K, V, S)) -> bool + '_ + Clone
 where
     K: Borrow<Q>,
     Q: ?Sized + Eq,
@@ -23,7 +23,7 @@ where
 }
 
 #[cfg_attr(feature = "inline-more", inline)]
-pub(crate) fn equivalent<Q, K>(k: &Q) -> impl Fn(&K) -> bool + '_
+pub(crate) fn equivalent<Q, K>(k: &Q) -> impl Fn(&K) -> bool + '_ + Clone
 where
     K: Borrow<Q>,
     Q: ?Sized + Eq,
