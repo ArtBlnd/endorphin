@@ -53,14 +53,32 @@ where
     H: BuildHasher,
 {
     #[inline]
+    fn process_single_backlog(&mut self) {
+        if self.exp_backlog.is_empty() {
+            return;
+        }
+
+        if let Some(backlog) = self.exp_backlog.pop() {
+            for entry_id in backlog.into_iter().filter_map(|v| v) {
+                // bucket could already removed and its empty storage.
+                if let Some(bucket) = self.exp_bucket_table.release_slot(entry_id) {
+                    unsafe {
+                        self.table.remove(bucket);
+                    }
+                }
+            }
+        }
+    }
+
+    #[inline]
     fn grow_and_insert(
         &mut self,
         hash: u64,
         v: (K, V, Storage<P::Storage>),
     ) -> Bucket<(K, V, Storage<P::Storage>)> {
         let mut has_backlog = false;
-        while let Some(removed) = self.exp_backlog.pop() {
-            for entry_id in removed.into_iter().filter_map(|v| v) {
+        while let Some(backlog) = self.exp_backlog.pop() {
+            for entry_id in backlog.into_iter().filter_map(|v| v) {
                 // bucket could already removed and its empty storage.
                 if let Some(bucket) = self.exp_bucket_table.release_slot(entry_id) {
                     unsafe {
@@ -122,6 +140,7 @@ where
             // set bucket marked as expired.
             s.mark_as_removed();
         });
+
         self.exp_backlog.push(removed);
     }
 
@@ -175,6 +194,9 @@ where
 
     #[inline]
     pub fn insert(&mut self, k: K, v: V, init: P::Info) -> Option<V> {
+        // try to process single backlog when on every mutable state.
+        self.process_single_backlog();
+
         let hash = make_insert_hash::<K, H>(&self.hash_builder, &k);
 
         // initialize storage with info value.
@@ -215,7 +237,20 @@ where
         K: Borrow<Q>,
         Q: Hash + Eq,
     {
-        todo!();
+        // try to process single backlog when on every mutable state.
+        self.process_single_backlog();
+
+        // Avoid `Option::map` because it bloats LLVM IR.
+        let hash = make_hash::<K, Q, H>(&self.hash_builder, &k);
+        let v = match self.table.remove_entry(hash, equivalent_key(k)) {
+            Some((_, v, s)) => {
+                self.exp_bucket_table.set_bucket(s.entry_id, None);
+                Some(v)
+            }
+            None => None,
+        };
+
+        return v;
     }
 }
 

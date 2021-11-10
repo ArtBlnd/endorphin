@@ -39,10 +39,6 @@ impl ExpirePolicy for LazyFixedTTLPolicy {
         Command::Noop
     }
 
-    fn on_remove(&self, _: EntryId, _: &mut Self::Storage) -> Command {
-        Command::Noop
-    }
-
     fn on_resize(&self) -> Command {
         Command::Noop
     }

@@ -80,24 +80,6 @@ impl ExpirePolicy for TTLPolicy {
         Command::Noop
     }
 
-    fn on_remove(&self, entry: EntryId, expire_at: &mut Self::Storage) -> Command {
-        let slot = align_instant(*expire_at, self.presision);
-
-        let mut ttl_records = self.ttl_records.write();
-        for record in ttl_records.get_mut(&slot).unwrap() {
-            if let Some(record) = record {
-                if *record == entry {
-                    continue;
-                }
-            }
-
-            *record = None;
-            return Command::Noop;
-        }
-
-        unreachable!();
-    }
-
     fn on_resize(&self) -> Command {
         Command::Noop
     }

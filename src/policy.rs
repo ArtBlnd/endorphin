@@ -28,6 +28,5 @@ pub trait ExpirePolicy {
 
     fn on_access(&self, entry: EntryId, storage: &mut Self::Storage) -> Command;
     fn on_insert(&self, entry: EntryId, storage: &mut Self::Storage) -> Command;
-    fn on_remove(&self, entry: EntryId, storage: &mut Self::Storage) -> Command;
     fn on_resize(&self) -> Command;
 }
