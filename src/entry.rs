@@ -27,10 +27,6 @@ impl<B> EntryIdTable<B> {
     }
 
     pub fn set_bucket(&mut self, slot: EntryId, bucket: Option<Bucket<B>>) {
-        if bucket.is_none() {
-            println!("{:?}", slot);
-        }
-
         *self.table.get_mut(slot).unwrap() = bucket;
     }
 
