@@ -6,10 +6,7 @@ use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use parking_lot::RwLock;
-use parking_lot::RwLockUpgradableReadGuard;
-
-use atomic::Atomic;
-use atomic::Ordering;
+use atomic::{Atomic, Ordering};
 
 pub struct TTLPolicy {
     ttl_records: RwLock<BTreeMap<Instant, Vec<Option<EntryId>>>>,
@@ -48,11 +45,11 @@ impl ExpirePolicy for TTLPolicy {
             .store(Instant::now(), Ordering::Relaxed);
     }
 
-    fn is_expired(&self, entry: EntryId, expire_at: &mut Self::Storage) -> bool {
+    fn is_expired(&self, _: EntryId, expire_at: &mut Self::Storage) -> bool {
         *expire_at < Instant::now()
     }
 
-    fn on_access(&self, entry: EntryId, expire_at: &mut Self::Storage) -> Command {
+    fn on_access(&self, _: EntryId, _: &mut Self::Storage) -> Command {
         let now = Instant::now();
         loop {
             let last_update = self.ttl_last_update.load(Ordering::Relaxed);
