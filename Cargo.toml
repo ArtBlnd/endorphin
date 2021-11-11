@@ -6,7 +6,7 @@ edition = "2018"
 [dependencies]
 atomic = "0.5.1"
 crossbeam = "0.8.1"
-hashbrown = { version = "*", features = ["rayon", "raw"]}
+hashbrown = { version = "0.11.2", features = ["rayon", "raw"] }
 once_cell = "1.8.0"
 parking_lot = "0.11.2"
 slotmap = "1.0.6"
