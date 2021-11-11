@@ -21,7 +21,7 @@ impl ExpirePolicy for LazyFixedTTLPolicy {
         Instant::now() + self.ttl
     }
 
-    fn clear(&self) {}
+    fn clear(&mut self) {}
 
     fn is_expired(&self, _: EntryId, storage: &mut Self::Storage) -> bool {
         *storage > Instant::now()

@@ -8,21 +8,27 @@ use std::time::{Duration, Instant};
 use parking_lot::RwLock;
 use parking_lot::RwLockUpgradableReadGuard;
 
+use atomic::Atomic;
+use atomic::Ordering;
+
 pub struct TTLPolicy {
     ttl_records: RwLock<BTreeMap<Instant, Vec<Option<EntryId>>>>,
-    ttl_latest_check: RwLock<Instant>,
+    ttl_last_update: Atomic<Instant>,
     presision: Duration,
 }
 
 impl TTLPolicy {
+    #[must_use]
     pub fn new() -> Self {
-        Self::with_presision(Duration::from_millis(1))
+        // default presision is 1 seconds
+        Self::with_presision(Duration::from_millis(100))
     }
 
+    #[must_use]
     pub fn with_presision(presision: Duration) -> Self {
         Self {
             ttl_records: RwLock::new(BTreeMap::new()),
-            ttl_latest_check: RwLock::new(Instant::now()),
+            ttl_last_update: Atomic::new(Instant::now()),
             presision,
         }
     }
@@ -36,9 +42,10 @@ impl ExpirePolicy for TTLPolicy {
         Instant::now() + ttl
     }
 
-    fn clear(&self) {
+    fn clear(&mut self) {
         self.ttl_records.write().clear();
-        *self.ttl_latest_check.write() = Instant::now();
+        self.ttl_last_update
+            .store(Instant::now(), Ordering::Relaxed);
     }
 
     fn is_expired(&self, entry: EntryId, expire_at: &mut Self::Storage) -> bool {
@@ -47,13 +54,19 @@ impl ExpirePolicy for TTLPolicy {
 
     fn on_access(&self, entry: EntryId, expire_at: &mut Self::Storage) -> Command {
         let now = Instant::now();
-        {
-            let ttl_latest_check = self.ttl_latest_check.upgradable_read();
-            if *ttl_latest_check + self.presision > now {
+        loop {
+            let last_update = self.ttl_last_update.load(Ordering::Relaxed);
+            if likely(last_update + self.presision > now) {
                 return Command::Noop;
             }
 
-            *RwLockUpgradableReadGuard::upgrade(ttl_latest_check) = now;
+            if self
+                .ttl_last_update
+                .compare_exchange_weak(last_update, now, Ordering::Acquire, Ordering::Relaxed)
+                .is_ok()
+            {
+                break;
+            }
         }
 
         // if target entry did not expired yet...
@@ -95,12 +108,13 @@ fn align_instant(instant: Instant, by: Duration) -> Instant {
     static BASE: Lazy<Instant> = Lazy::new(|| Instant::now());
 
     let v = *BASE;
-    let mx = if likely(v > instant) {
-        let offs = v - instant;
+    let mx = if likely(v < instant) {
+        let offs = instant - v;
         offs.as_millis() / by.as_millis() + 1
     } else {
         return v;
     };
-
-    v + Duration::from_millis((by.as_millis() * mx) as u64)
+    
+    let result = v + Duration::from_millis((by.as_millis() * mx) as u64);
+    return result;
 }

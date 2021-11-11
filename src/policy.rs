@@ -12,8 +12,6 @@ pub enum Command {
     RemoveBulk(Vec<Option<EntryId>>),
     // Everything is good. Seems all entry is alive!
     Noop,
-    // Try shrink the table.
-    TryShrink,
 }
 
 pub trait ExpirePolicy {
@@ -22,7 +20,7 @@ pub trait ExpirePolicy {
 
     fn init_storage(&self, info: Self::Info) -> Self::Storage;
 
-    fn clear(&self);
+    fn clear(&mut self);
 
     fn is_expired(&self, entry: EntryId, storage: &mut Self::Storage) -> bool;
 

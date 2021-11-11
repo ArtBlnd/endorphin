@@ -140,7 +140,7 @@ where
             // also for cache friendly.
             Command::Remove(id) => removed.push(Some(id)),
             Command::RemoveBulk(mut id_list) => mem::swap(&mut removed, &mut id_list),
-            Command::TryShrink => unimplemented!("shrinking table is not supported yet!"),
+
             // there is nothing to expire.
             Command::Noop => return,
         }

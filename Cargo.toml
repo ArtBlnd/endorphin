@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2018"
 
 [dependencies]
+atomic = "0.5.1"
 crossbeam = "0.8.1"
 hashbrown = { version = "*", features = ["rayon", "raw"]}
 once_cell = "1.8.0"
