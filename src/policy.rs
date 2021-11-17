@@ -4,6 +4,8 @@ mod ttl_policy;
 pub use ttl_policy::*;
 mod tti_policy;
 pub use tti_policy::*;
+mod mixed_policy;
+pub use mixed_policy::*;
 
 use crate::EntryId;
 
