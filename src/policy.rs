@@ -2,6 +2,8 @@ mod lazy_fixed_ttl_policy;
 pub use lazy_fixed_ttl_policy::*;
 mod ttl_policy;
 pub use ttl_policy::*;
+mod tti_policy;
+pub use tti_policy::*;
 
 use crate::EntryId;
 
@@ -22,9 +24,9 @@ pub trait ExpirePolicy {
 
     fn clear(&mut self);
 
-    fn is_expired(&self, entry: EntryId, storage: &mut Self::Storage) -> bool;
+    fn is_expired(&self, entry: EntryId, storage: &Self::Storage) -> bool;
 
-    fn on_access(&self, entry: EntryId, storage: &mut Self::Storage) -> Command;
-    fn on_insert(&self, entry: EntryId, storage: &mut Self::Storage) -> Command;
+    fn on_access(&self, entry: EntryId, storage: &Self::Storage) -> Command;
+    fn on_insert(&self, entry: EntryId, storage: &Self::Storage) -> Command;
     fn on_resize(&self) -> Command;
 }

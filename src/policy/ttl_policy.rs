@@ -5,8 +5,8 @@ use crate::EntryId;
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use parking_lot::RwLock;
 use atomic::{Atomic, Ordering};
+use parking_lot::RwLock;
 
 pub struct TTLPolicy {
     ttl_records: RwLock<BTreeMap<Instant, Vec<Option<EntryId>>>>,
@@ -41,15 +41,14 @@ impl ExpirePolicy for TTLPolicy {
 
     fn clear(&mut self) {
         self.ttl_records.write().clear();
-        self.ttl_last_update
-            .store(Instant::now(), Ordering::Relaxed);
+        *self.ttl_last_update.get_mut() = Instant::now();
     }
 
-    fn is_expired(&self, _: EntryId, expire_at: &mut Self::Storage) -> bool {
+    fn is_expired(&self, _: EntryId, expire_at: &Self::Storage) -> bool {
         *expire_at < Instant::now()
     }
 
-    fn on_access(&self, _: EntryId, _: &mut Self::Storage) -> Command {
+    fn on_access(&self, _: EntryId, _: &Self::Storage) -> Command {
         let now = Instant::now();
         loop {
             let last_update = self.ttl_last_update.load(Ordering::Relaxed);
@@ -82,7 +81,7 @@ impl ExpirePolicy for TTLPolicy {
         Command::RemoveBulk(records.remove(&expires_at).unwrap())
     }
 
-    fn on_insert(&self, entry: EntryId, expire_at: &mut Self::Storage) -> Command {
+    fn on_insert(&self, entry: EntryId, expire_at: &Self::Storage) -> Command {
         let slot = align_instant(*expire_at, self.presision);
         {
             let mut ttl_records = self.ttl_records.write();
@@ -100,6 +99,7 @@ impl ExpirePolicy for TTLPolicy {
     }
 }
 
+#[inline]
 fn align_instant(instant: Instant, by: Duration) -> Instant {
     use once_cell::sync::Lazy;
     static BASE: Lazy<Instant> = Lazy::new(|| Instant::now());
@@ -111,7 +111,7 @@ fn align_instant(instant: Instant, by: Duration) -> Instant {
     } else {
         return v;
     };
-    
+
     let result = v + Duration::from_millis((by.as_millis() * mx) as u64);
     return result;
 }

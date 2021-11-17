@@ -23,11 +23,11 @@ impl ExpirePolicy for LazyFixedTTLPolicy {
 
     fn clear(&mut self) {}
 
-    fn is_expired(&self, _: EntryId, storage: &mut Self::Storage) -> bool {
+    fn is_expired(&self, _: EntryId, storage: &Self::Storage) -> bool {
         *storage > Instant::now()
     }
 
-    fn on_access(&self, entry: EntryId, storage: &mut Self::Storage) -> Command {
+    fn on_access(&self, entry: EntryId, storage: &Self::Storage) -> Command {
         if *storage > Instant::now() {
             Command::Remove(entry)
         } else {
@@ -35,7 +35,7 @@ impl ExpirePolicy for LazyFixedTTLPolicy {
         }
     }
 
-    fn on_insert(&self, _: EntryId, _: &mut Self::Storage) -> Command {
+    fn on_insert(&self, _: EntryId, _: &Self::Storage) -> Command {
         Command::Noop
     }
 
