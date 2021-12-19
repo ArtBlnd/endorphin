@@ -401,6 +401,11 @@ where
             }
         }
     }
+
+    #[inline]
+    pub fn values(&self) -> Values<'_, K, V, Storage<P::Storage>> {
+        Values { inner: self.iter() }
+    }
 }
 
 #[derive(Clone)]
@@ -434,5 +439,18 @@ impl<'a, K, V, P> Iterator for IterMut<'a, K, V, P> {
             .next()
             .map(|v| unsafe { v.as_mut() })
             .map(|(k, v, _)| (k, v))
+    }
+}
+
+#[derive(Clone)]
+pub struct Values<'a, K, V, P> {
+    inner: Iter<'a, K, V, P>
+}
+
+impl<'a, K, V, P> Iterator for Values<'a, K, V, P> {
+    type Item = &'a V;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|(_, v)| v)
     }
 }
