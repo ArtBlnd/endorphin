@@ -444,7 +444,7 @@ impl<'a, K, V, P> Iterator for IterMut<'a, K, V, P> {
 
 #[derive(Clone)]
 pub struct Values<'a, K, V, P> {
-    inner: Iter<'a, K, V, P>
+    inner: Iter<'a, K, V, P>,
 }
 
 impl<'a, K, V, P> Iterator for Values<'a, K, V, P> {

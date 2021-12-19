@@ -1,21 +1,21 @@
-use crate::policy::{TTIPolicy, TTLPolicy, TTIStorage, ExpirePolicy, Command};
-use crate::{EntryId};
+use crate::policy::{Command, ExpirePolicy, TTIPolicy, TTIStorage, TTLPolicy};
+use crate::EntryId;
 
 use std::time::{Duration, Instant};
 
 pub enum Expiration {
     TTL(Duration),
-    TTI(Duration)
+    TTI(Duration),
 }
 
 pub enum Storage {
     TTL(Instant),
-    TTI(TTIStorage)
+    TTI(TTIStorage),
 }
 
 pub struct MixedPolicy {
     ttl: TTLPolicy,
-    tti: TTIPolicy
+    tti: TTIPolicy,
 }
 
 impl MixedPolicy {
