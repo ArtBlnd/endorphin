@@ -409,17 +409,21 @@ where
 
     #[inline]
     pub fn values_mut(&mut self) -> ValuesMut<'_, K, V, Storage<P::Storage>> {
-        ValuesMut { inner: self.iter_mut() }
+        ValuesMut {
+            inner: self.iter_mut(),
+        }
     }
 
     #[inline]
     pub fn keys(&self) -> Keys<'_, K, V, Storage<P::Storage>> {
-        Keys {inner: self.iter() }
+        Keys { inner: self.iter() }
     }
 
     #[inline]
     pub fn keys_mut(&mut self) -> KeysMut<'_, K, V, Storage<P::Storage>> {
-        KeysMut {inner: self.iter_mut() }
+        KeysMut {
+            inner: self.iter_mut(),
+        }
     }
 }
 
@@ -462,7 +466,7 @@ pub struct Keys<'a, K, V, P> {
     inner: Iter<'a, K, V, P>,
 }
 
-impl <'a, K, V, P> Iterator for Keys<'a, K, V, P> {
+impl<'a, K, V, P> Iterator for Keys<'a, K, V, P> {
     type Item = &'a K;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -475,7 +479,7 @@ pub struct KeysMut<'a, K, V, P> {
     inner: IterMut<'a, K, V, P>,
 }
 
-impl <'a, K, V, P> Iterator for KeysMut<'a, K, V, P> {
+impl<'a, K, V, P> Iterator for KeysMut<'a, K, V, P> {
     type Item = &'a mut K;
 
     fn next(&mut self) -> Option<Self::Item> {
