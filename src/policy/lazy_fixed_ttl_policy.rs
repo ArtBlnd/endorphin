@@ -3,7 +3,7 @@ use crate::EntryId;
 
 use std::time::{Duration, Instant};
 
-struct LazyFixedTTLPolicy {
+pub struct LazyFixedTTLPolicy {
     ttl: Duration,
 }
 
