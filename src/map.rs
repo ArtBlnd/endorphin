@@ -352,6 +352,24 @@ where
         self.table.shrink_to(min_capacity, hasher);
         self.update_bucket_id();
     }
+
+    #[inline]
+    pub fn drain(&mut self) -> Drain<'_, K, V, P> {
+        unsafe { 
+            for e in self.table.iter() {
+                let mut s = e.read().2;
+                self.handle_status(self.exp_policy.on_access(s.entry_id, &mut s.storage));
+            } 
+        }
+
+        while !self.exp_backlog.is_empty() {
+            self.process_single_backlog();
+        }
+
+        Drain {
+            inner: unsafe { self.table.drain_iter_from(self.table.iter()) },
+        }
+    }
 }
 
 impl<K, V, P, H> HashMap<K, V, P, H>
@@ -510,5 +528,23 @@ impl<'a, K, V, P> Iterator for ValuesMut<'a, K, V, P> {
 
     fn next(&mut self) -> Option<Self::Item> {
         self.inner.next().map(|(_, v)| v)
+    }
+}
+
+pub struct Drain<'a, K, V, P>
+where
+    P: ExpirePolicy,
+{
+    inner: hashbrown::raw::RawDrain<'a, (K, V, Storage<P::Storage>)>,
+}
+
+impl<'a, K, V, P> Iterator for Drain<'a, K, V, P>
+where
+    P: ExpirePolicy,
+{
+    type Item = (K, V, Storage<P::Storage>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
     }
 }
