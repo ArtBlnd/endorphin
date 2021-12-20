@@ -367,7 +367,7 @@ where
         }
 
         Drain {
-            inner: unsafe { self.table.drain_iter_from(self.table.iter()) },
+            inner: self.table.drain(),
         }
     }
 }
