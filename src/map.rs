@@ -6,7 +6,7 @@ use crate::{EntryId, EntryIdTable};
 
 // hashbrown internals.
 use hashbrown::hash_map::DefaultHashBuilder;
-use hashbrown::raw::{Bucket, RawIter, RawTable};
+use hashbrown::raw::{Bucket, RawDrain, RawIter, RawTable};
 
 use std::borrow::Borrow;
 use std::hash::{BuildHasher, Hash};
@@ -355,19 +355,11 @@ where
 
     #[inline]
     pub fn drain(&mut self) -> Drain<'_, K, V, P> {
-        unsafe {
-            for e in self.table.iter() {
-                let mut s = e.read().2;
-                self.handle_status(self.exp_policy.on_access(s.entry_id, &mut s.storage));
-            }
-        }
-
-        while !self.exp_backlog.is_empty() {
-            self.process_single_backlog();
-        }
+        self.exp_backlog = SegQueue::new();
 
         Drain {
             inner: self.table.drain(),
+            exp_policy: &self.exp_policy,
         }
     }
 }
@@ -535,16 +527,24 @@ pub struct Drain<'a, K, V, P>
 where
     P: ExpirePolicy,
 {
-    inner: hashbrown::raw::RawDrain<'a, (K, V, Storage<P::Storage>)>,
+    inner: RawDrain<'a, (K, V, Storage<P::Storage>)>,
+    exp_policy: &'a P,
 }
 
 impl<'a, K, V, P> Iterator for Drain<'a, K, V, P>
 where
     P: ExpirePolicy,
 {
-    type Item = (K, V, Storage<P::Storage>);
+    type Item = (K, V);
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next()
+        while let Some(this) = self.inner.next() {
+            if self.exp_policy.is_expired(this.2.entry_id, &this.2.storage) {
+                continue;
+            } else {
+                return Some((this.0, this.1));
+            }
+        }
+        None
     }
 }
