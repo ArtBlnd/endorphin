@@ -355,11 +355,11 @@ where
 
     #[inline]
     pub fn drain(&mut self) -> Drain<'_, K, V, P> {
-        unsafe { 
+        unsafe {
             for e in self.table.iter() {
                 let mut s = e.read().2;
                 self.handle_status(self.exp_policy.on_access(s.entry_id, &mut s.storage));
-            } 
+            }
         }
 
         while !self.exp_backlog.is_empty() {
