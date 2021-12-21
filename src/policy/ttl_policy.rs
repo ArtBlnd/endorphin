@@ -105,13 +105,10 @@ fn align_instant(instant: Instant, by: Duration) -> Instant {
     static BASE: Lazy<Instant> = Lazy::new(|| Instant::now());
 
     let v = *BASE;
-    let mx = if likely(v < instant) {
+    if likely(v < instant) {
         let offs = instant - v;
-        offs.as_millis() / by.as_millis() + 1
+        instant + Duration::from_millis((offs.as_millis() % by.as_millis()) as u64)
     } else {
-        return v;
-    };
-
-    let result = v + Duration::from_millis((by.as_millis() * mx) as u64);
-    return result;
+        v
+    }
 }
