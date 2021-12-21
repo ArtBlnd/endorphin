@@ -548,3 +548,289 @@ where
         None
     }
 }
+
+#[cfg(test)]
+mod test_map {
+    use super::HashMap;
+    use crate::policy::{Command, ExpirePolicy};
+    use crate::EntryId;
+
+    struct MockPolicy {}
+    impl MockPolicy {
+        fn new() -> Self {
+            Self {}
+        }
+    }
+
+    impl ExpirePolicy for MockPolicy {
+        type Info = ();
+
+        type Storage = ();
+
+        fn init_storage(&self, info: Self::Info) -> Self::Storage {
+            ()
+        }
+
+        fn clear(&mut self) {}
+
+        fn is_expired(&self, entry: EntryId, storage: &Self::Storage) -> bool {
+            false
+        }
+
+        fn on_access(&self, entry: EntryId, storage: &Self::Storage) -> Command {
+            Command::Noop
+        }
+
+        fn on_insert(&self, entry: EntryId, storage: &Self::Storage) -> Command {
+            Command::Noop
+        }
+
+        fn on_resize(&self) -> Command {
+            Command::Noop
+        }
+    }
+
+    #[test]
+    fn test_zero_capacities() {
+        let mut map = HashMap::new(MockPolicy::new());
+
+        assert_eq!(map.capacity(), 0);
+
+        map.insert(1, 1, ());
+        map.insert(2, 2, ());
+        map.remove(&1);
+        map.remove(&2);
+        map.shrink_to_fit();
+
+        assert_eq!(map.capacity(), 0);
+    }
+
+    #[test]
+    fn test_insert() {
+        let mut map = HashMap::new(MockPolicy::new());
+
+        assert_eq!(map.len(), 0);
+        assert!(map.insert(0, 0, ()).is_none());
+        assert_eq!(map.len(), 1);
+        assert!(map.insert(1, 1, ()).is_none());
+        assert_eq!(map.len(), 2);
+
+        assert!(map.insert(1, 2, ()).is_some());
+        assert_eq!(map.len(), 2);
+
+        assert_eq!(map.get(&0).unwrap(), &0);
+        assert_eq!(map.get(&1).unwrap(), &2);
+    }
+
+    #[test]
+    fn test_get() {
+        let mut map = HashMap::new(MockPolicy::new());
+
+        assert!(map.get(&0).is_none());
+        assert!(map.get(&1).is_none());
+
+        assert!(map.insert(0, 0, ()).is_none());
+        assert!(map.insert(1, 1, ()).is_none());
+
+        assert_eq!(map.get(&0).unwrap(), &0);
+        assert_eq!(map.get(&1).unwrap(), &1);
+    }
+
+    #[test]
+    fn test_get_mut() {
+        let mut map = HashMap::new(MockPolicy::new());
+
+        assert!(map.get_mut(&0).is_none());
+        assert!(map.get_mut(&1).is_none());
+
+        assert!(map.insert(0, 0, ()).is_none());
+        assert!(map.insert(1, 1, ()).is_none());
+
+        let v0 = map.get_mut(&0).unwrap();
+        let v1 = map.get_mut(&1).unwrap();
+
+        assert_eq!(v0, &0);
+        assert_eq!(v1, &1);
+
+        *v0 = 10;
+        *v1 = 20;
+
+        assert_eq!(map.get(&0).unwrap(), &10);
+        assert_eq!(map.get(&1).unwrap(), &20);
+    }
+
+    #[test]
+    fn test_get_key_value() {
+        let mut map = HashMap::new(MockPolicy::new());
+
+        assert!(map.get_key_value(&0).is_none());
+        assert!(map.get_key_value(&1).is_none());
+
+        assert!(map.insert(0, 0, ()).is_none());
+        assert!(map.insert(1, 1, ()).is_none());
+
+        assert_eq!(map.get_key_value(&0).unwrap(), (&0, &0));
+        assert_eq!(map.get_key_value(&1).unwrap(), (&1, &1));
+    }
+
+    #[test]
+    fn test_contains_key() {
+        let mut map = HashMap::new(MockPolicy::new());
+
+        assert_eq!(map.contains_key(&0), false);
+        assert_eq!(map.contains_key(&1), false);
+
+        assert!(map.insert(0, 0, ()).is_none());
+
+        assert_eq!(map.contains_key(&0), true);
+        assert_eq!(map.contains_key(&1), false);
+
+        assert!(map.remove(&0).is_some());
+
+        assert_eq!(map.contains_key(&0), false);
+    }
+
+    #[test]
+    fn test_remove() {
+        let mut map = HashMap::new(MockPolicy::new());
+
+        assert_eq!(map.contains_key(&0), false);
+
+        assert!(map.insert(0, 1, ()).is_none());
+
+        assert_eq!(map.contains_key(&0), true);
+
+        assert_eq!(map.remove(&0).unwrap(), 1);
+
+        assert_eq!(map.contains_key(&0), false);
+    }
+
+    #[test]
+    fn test_remove_entry() {
+        let mut map = HashMap::new(MockPolicy::new());
+
+        assert_eq!(map.contains_key(&0), false);
+
+        assert!(map.insert(0, 1, ()).is_none());
+
+        assert_eq!(map.contains_key(&0), true);
+
+        assert_eq!(map.remove_entry(&0).unwrap(), (0, 1));
+
+        assert_eq!(map.contains_key(&0), false);
+    }
+
+    #[test]
+    fn test_reserve() {
+        let mut map = HashMap::<u32, u32, MockPolicy>::new(MockPolicy::new());
+
+        assert_eq!(map.capacity(), 0);
+
+        map.reserve(10);
+
+        assert!(map.capacity() > 0);
+    }
+
+    #[test]
+    fn test_shrink_to_fit() {
+        let mut map = HashMap::new(MockPolicy::new());
+
+        assert_eq!(map.capacity(), 0);
+
+        map.insert(0, 0, ());
+        map.insert(1, 1, ());
+
+        map.shrink_to_fit();
+
+        assert!(map.capacity() >= 2);
+
+        map.remove(&0);
+        map.remove(&1);
+        map.shrink_to_fit();
+
+        assert_eq!(map.capacity(), 0);
+    }
+
+    #[test]
+    fn test_shrink_to() {
+        let mut map = HashMap::new(MockPolicy::new());
+
+        map.reserve(32);
+
+        assert!(map.capacity() >= 32);
+
+        map.shrink_to(0);
+
+        assert_eq!(map.capacity(), 0);
+
+        map.insert(0, 0, ());
+        map.insert(1, 1, ());
+        map.insert(2, 2, ());
+        map.insert(3, 3, ());
+
+        map.shrink_to(0);
+        assert!(map.capacity() >= 4);
+    }
+
+    #[test]
+    fn test_drain() {
+        let mut map = HashMap::new(MockPolicy::new());
+
+        map.insert(1, 1, ());
+        map.insert(2, 2, ());
+        map.insert(3, 3, ());
+        map.insert(4, 4, ());
+
+        {
+            let mut sum = 0;
+
+            let drains = map.drain();
+            for e in drains {
+                sum += e.0;
+            }
+
+            assert_eq!(sum, 10);
+        }
+
+        assert!(map.is_empty());
+    }
+
+    #[test]
+    fn test_clear() {
+        let mut map = HashMap::new(MockPolicy::new());
+
+        assert!(map.is_empty());
+        assert_eq!(map.capacity(), 0);
+
+        map.insert(1, 1, ());
+        map.insert(2, 2, ());
+        map.insert(3, 3, ());
+        map.insert(4, 4, ());
+
+        assert!(!map.is_empty());
+
+        map.clear();
+
+        assert!(map.is_empty());
+        assert!(map.capacity() > 0);
+    }
+
+    #[test]
+    fn test_len() {
+        let mut map = HashMap::new(MockPolicy::new());
+
+        assert_eq!(map.len(), 0);
+
+        map.insert(1, 1, ());
+        assert_eq!(map.len(), 1);
+
+        map.insert(2, 2, ());
+        assert_eq!(map.len(), 2);
+
+        map.remove(&1);
+        assert_eq!(map.len(), 1);
+
+        map.remove(&2);
+        assert_eq!(map.len(), 0);
+    }
+}
