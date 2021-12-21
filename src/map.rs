@@ -6,7 +6,7 @@ use crate::{EntryId, EntryIdTable};
 
 // hashbrown internals.
 use hashbrown::hash_map::DefaultHashBuilder;
-use hashbrown::raw::{Bucket, RawIter, RawTable};
+use hashbrown::raw::{Bucket, RawDrain, RawIter, RawTable};
 
 use std::borrow::Borrow;
 use std::hash::{BuildHasher, Hash};
@@ -352,6 +352,16 @@ where
         self.table.shrink_to(min_capacity, hasher);
         self.update_bucket_id();
     }
+
+    #[inline]
+    pub fn drain(&mut self) -> Drain<'_, K, V, P> {
+        self.exp_backlog = SegQueue::new();
+
+        Drain {
+            inner: self.table.drain(),
+            exp_policy: &self.exp_policy,
+        }
+    }
 }
 
 impl<K, V, P, H> HashMap<K, V, P, H>
@@ -401,6 +411,30 @@ where
             }
         }
     }
+
+    #[inline]
+    pub fn values(&self) -> Values<'_, K, V, Storage<P::Storage>> {
+        Values { inner: self.iter() }
+    }
+
+    #[inline]
+    pub fn values_mut(&mut self) -> ValuesMut<'_, K, V, Storage<P::Storage>> {
+        ValuesMut {
+            inner: self.iter_mut(),
+        }
+    }
+
+    #[inline]
+    pub fn keys(&self) -> Keys<'_, K, V, Storage<P::Storage>> {
+        Keys { inner: self.iter() }
+    }
+
+    #[inline]
+    pub fn keys_mut(&mut self) -> KeysMut<'_, K, V, Storage<P::Storage>> {
+        KeysMut {
+            inner: self.iter_mut(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -434,5 +468,83 @@ impl<'a, K, V, P> Iterator for IterMut<'a, K, V, P> {
             .next()
             .map(|v| unsafe { v.as_mut() })
             .map(|(k, v, _)| (k, v))
+    }
+}
+
+#[derive(Clone)]
+pub struct Keys<'a, K, V, P> {
+    inner: Iter<'a, K, V, P>,
+}
+
+impl<'a, K, V, P> Iterator for Keys<'a, K, V, P> {
+    type Item = &'a K;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|(k, _)| k)
+    }
+}
+
+#[derive(Clone)]
+pub struct KeysMut<'a, K, V, P> {
+    inner: IterMut<'a, K, V, P>,
+}
+
+impl<'a, K, V, P> Iterator for KeysMut<'a, K, V, P> {
+    type Item = &'a mut K;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|(k, _)| k)
+    }
+}
+
+#[derive(Clone)]
+pub struct Values<'a, K, V, P> {
+    inner: Iter<'a, K, V, P>,
+}
+
+impl<'a, K, V, P> Iterator for Values<'a, K, V, P> {
+    type Item = &'a V;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|(_, v)| v)
+    }
+}
+
+#[derive(Clone)]
+pub struct ValuesMut<'a, K, V, P> {
+    inner: IterMut<'a, K, V, P>,
+}
+
+impl<'a, K, V, P> Iterator for ValuesMut<'a, K, V, P> {
+    type Item = &'a mut V;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next().map(|(_, v)| v)
+    }
+}
+
+pub struct Drain<'a, K, V, P>
+where
+    P: ExpirePolicy,
+{
+    inner: RawDrain<'a, (K, V, Storage<P::Storage>)>,
+    exp_policy: &'a P,
+}
+
+impl<'a, K, V, P> Iterator for Drain<'a, K, V, P>
+where
+    P: ExpirePolicy,
+{
+    type Item = (K, V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while let Some(this) = self.inner.next() {
+            if self.exp_policy.is_expired(this.2.entry_id, &this.2.storage) {
+                continue;
+            } else {
+                return Some((this.0, this.1));
+            }
+        }
+        None
     }
 }
