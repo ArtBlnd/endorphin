@@ -152,7 +152,7 @@ fn align_instant(instant: Instant, by: Duration) -> Instant {
     let v = *BASE;
     if likely(v < instant) {
         let offs = instant - v;
-        instant + Duration::from_millis((offs.as_millis() % by.as_millis()) as u64)
+        instant + Duration::from_millis((by.as_millis() - offs.as_millis() % by.as_millis()) as u64)
     } else {
         v
     }
