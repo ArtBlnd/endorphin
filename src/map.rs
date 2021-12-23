@@ -644,7 +644,7 @@ where
 
     /// Clears the `Hashmap`, returning all key-value pairs as an iterator. Keeps the allocated memory for reuse.
     ///
-    /// When drop, this function also triggers internal [`ExpirePolicy::clear`].
+    /// When drop, this function also triggers internal [`ExpirePolicy::clear()`].
     ///
     /// # Examples
     ///
@@ -708,7 +708,7 @@ where
 
     /// Returns the exact number of elements in the `HashMap`.
     ///
-    /// This functions is accurate than [`HashMap::len_approx`] but uses slower algorithm `O(n)`.
+    /// This functions is accurate than [`HashMap::len_approx()`] but uses slower algorithm `O(n)`.
     /// # Examples
     ///
     /// ```
@@ -1125,21 +1125,21 @@ mod test_map {
 
         type Storage = ();
 
-        fn init_storage(&self, info: Self::Info) -> Self::Storage {
+        fn init_storage(&self, _: Self::Info) -> Self::Storage {
             ()
         }
 
         fn clear(&mut self) {}
 
-        fn is_expired(&self, entry: EntryId, storage: &Self::Storage) -> bool {
+        fn is_expired(&self, _: EntryId, _: &Self::Storage) -> bool {
             false
         }
 
-        fn on_access(&self, entry: EntryId, storage: &Self::Storage) -> Command {
+        fn on_access(&self, _: EntryId, _: &Self::Storage) -> Command {
             Command::Noop
         }
 
-        fn on_insert(&self, entry: EntryId, storage: &Self::Storage) -> Command {
+        fn on_insert(&self, _: EntryId, _: &Self::Storage) -> Command {
             Command::Noop
         }
 
