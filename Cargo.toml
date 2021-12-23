@@ -1,7 +1,7 @@
 [package]
 name = "endorphin"
 description = "Key-Value based in-memory cache library which supports Custom Expiration Policies"
-license = "LICENSE.txt"
+license-file = "LICENSE.txt"
 version = "0.1.1"
 edition = "2018"
 
