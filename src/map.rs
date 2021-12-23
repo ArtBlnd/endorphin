@@ -1125,21 +1125,21 @@ mod test_map {
 
         type Storage = ();
 
-        fn init_storage(&self, info: Self::Info) -> Self::Storage {
+        fn init_storage(&self, _: Self::Info) -> Self::Storage {
             ()
         }
 
         fn clear(&mut self) {}
 
-        fn is_expired(&self, entry: EntryId, storage: &Self::Storage) -> bool {
+        fn is_expired(&self, _: EntryId, _: &Self::Storage) -> bool {
             false
         }
 
-        fn on_access(&self, entry: EntryId, storage: &Self::Storage) -> Command {
+        fn on_access(&self, _: EntryId, _: &Self::Storage) -> Command {
             Command::Noop
         }
 
-        fn on_insert(&self, entry: EntryId, storage: &Self::Storage) -> Command {
+        fn on_insert(&self, _: EntryId, _: &Self::Storage) -> Command {
             Command::Noop
         }
 
