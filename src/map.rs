@@ -13,6 +13,7 @@ use std::hash::{BuildHasher, Hash};
 use std::iter::Iterator;
 use std::marker::PhantomData;
 use std::mem;
+use std::panic::{RefUnwindSafe, UnwindSafe};
 
 use crossbeam::queue::SegQueue;
 
@@ -48,12 +49,67 @@ where
 {
 }
 
+impl<K, V, P, H> Unpin for HashMap<K, V, P, H>
+where
+    P: ExpirePolicy,
+    K: Unpin,
+    V: Unpin,
+    P: Unpin,
+    H: Unpin,
+{
+}
+
+impl<K, V, P, H> UnwindSafe for HashMap<K, V, P, H>
+where
+    P: ExpirePolicy,
+    K: UnwindSafe,
+    V: UnwindSafe,
+    P: UnwindSafe,
+    H: UnwindSafe,
+{
+}
+
+impl<K, V, P, H> RefUnwindSafe for HashMap<K, V, P, H>
+where
+    P: ExpirePolicy,
+    K: RefUnwindSafe,
+    V: RefUnwindSafe,
+    P: RefUnwindSafe,
+    H: RefUnwindSafe,
+{
+}
+
 impl<K, V, P> HashMap<K, V, P, DefaultHashBuilder>
 where
     P: ExpirePolicy,
 {
+    /// Creates an empty `HashMap` with specified expire policy.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::<u32, u32, _>::new(LazyFixedTTLPolicy::new(Duration::from_secs(30)));
+    /// ```
     pub fn new(policy: P) -> Self {
         let table = RawTable::new();
+
+        Self {
+            exp_bucket_table: EntryIdTable::new(),
+            exp_policy: policy,
+            exp_backlog: SegQueue::new(),
+
+            hash_builder: DefaultHashBuilder::default(),
+            table,
+        }
+    }
+
+    pub fn with_capacity(capacity: usize, policy: P) -> Self {
+        let table = RawTable::with_capacity(capacity);
 
         Self {
             exp_bucket_table: EntryIdTable::new(),
@@ -157,6 +213,27 @@ where
         self.exp_backlog.push(removed);
     }
 
+    /// Returns a reference to the value corresponding to the key.
+    ///
+    /// If the entry is expired, returns `None`
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::thread::sleep;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    /// cache.insert(0, "0", ());
+    /// assert_eq!(cache.get(&0), Some(&"0"));
+    /// assert_eq!(cache.get(&1), None);
+    ///
+    /// sleep(Duration::from_millis(10));
+    /// assert_eq!(cache.get(&0), None);
+    /// ```
     #[inline]
     pub fn get<Q: ?Sized>(&self, k: &Q) -> Option<&V>
     where
@@ -181,6 +258,28 @@ where
         }
     }
 
+    /// Returns the key-value pair corresponding to the supplied key.
+    ///
+    /// If the entry is expired, returns `None`
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::thread::sleep;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    /// cache.insert(0, "0", ());
+    ///
+    /// assert_eq!(cache.get_key_value(&0), Some((&0, &"0")));
+    /// assert_eq!(cache.get_key_value(&1), None);
+    ///
+    /// sleep(Duration::from_millis(10));
+    /// assert_eq!(cache.get_key_value(&0), None);
+    /// ```
     #[inline]
     pub fn get_key_value<Q: ?Sized>(&self, k: &Q) -> Option<(&K, &V)>
     where
@@ -205,6 +304,29 @@ where
         }
     }
 
+    /// Returns a mutable reference to the value corresponding to the key.
+    ///
+    /// If the entry is expired, returns `None`
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::thread::sleep;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    /// cache.insert(0, "0", ());
+    /// if let Some(x) = cache.get_mut(&0) {
+    ///     *x = "1";
+    ///
+    ///     sleep(Duration::from_millis(10));
+    ///     assert_eq!(*x, "1");
+    /// }
+    /// assert!(cache.get(&0).is_none());
+    /// ```
     #[inline]
     pub fn get_mut<Q: ?Sized>(&self, k: &Q) -> Option<&mut V>
     where
@@ -229,6 +351,25 @@ where
         }
     }
 
+    /// Returns `true` if the `HashMap` contains a value for the specified key.
+    ///
+    /// If the entry is expired, returns `false`
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::thread::sleep;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    /// cache.insert(0, "0", ());
+    /// assert!(cache.contains_key(&0));
+    /// sleep(Duration::from_millis(10));
+    /// assert!(!cache.contains_key(&0));
+    /// ```
     #[inline]
     pub fn contains_key<Q: ?Sized>(&self, k: &Q) -> bool
     where
@@ -238,6 +379,29 @@ where
         self.get(k).is_some()
     }
 
+    /// Inserts a key-value pair into the `HashMap`.
+    ///
+    /// If the `HashMap` did not have this key present, None is returned.
+    ///
+    /// If the `HashMap` did have this key present, the value is updated, and the old value is returned.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::thread::sleep;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    /// assert_eq!(cache.insert(0, "a", ()), None);
+    /// assert!(!cache.is_empty());
+    ///
+    /// assert_eq!(cache.insert(0, "b", ()), Some("a"));
+    /// sleep(Duration::from_millis(10));
+    /// assert_eq!(cache.insert(0, "c", ()), None);
+    /// ```
     #[inline]
     pub fn insert(&mut self, k: K, v: V, init: P::Info) -> Option<V> {
         // try to process single backlog when on every mutable state.
@@ -259,8 +423,14 @@ where
                 self.exp_bucket_table
                     .set_bucket(storage.entry_id, Some(bucket.clone()));
 
-                *old_s = storage;
-                (bucket, Some(mem::replace(old_v, v)))
+                let old_s = mem::replace(old_s, storage);
+                if self.exp_policy.is_expired(old_s.entry_id, &old_s.storage)
+                    || unlikely(old_s.is_removed())
+                {
+                    (bucket, None)
+                } else {
+                    (bucket, Some(mem::replace(old_v, v)))
+                }
             } else {
                 let bucket = match self.table.try_insert_no_grow(hash, (k, v, storage)) {
                     Ok(bucket) => bucket,
@@ -277,6 +447,28 @@ where
         return old_v;
     }
 
+    /// Removes a key from the `HashMap`, returning the value at the key if the key was previously in the `HashMap`.
+    ///
+    /// If the `HashMap` did not have this key present, None is returned.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::thread::sleep;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    /// cache.insert(0, "a", ());
+    /// cache.insert(1, "b", ());
+    ///
+    /// assert_eq!(cache.remove(&1), Some("b"));
+    ///
+    /// sleep(Duration::from_millis(15));
+    /// assert_eq!(cache.remove(&0), None);
+    /// ```
     #[inline]
     pub fn remove<Q: ?Sized>(&mut self, k: &Q) -> Option<V>
     where
@@ -291,7 +483,12 @@ where
         let entry = match self.table.remove_entry(hash, equivalent_key(k)) {
             Some((_, v, s)) => {
                 self.exp_bucket_table.set_bucket(s.entry_id, None);
-                Some(v)
+
+                if self.exp_policy.is_expired(s.entry_id, &s.storage) || unlikely(s.is_removed()) {
+                    None
+                } else {
+                    Some(v)
+                }
             }
             None => None,
         };
@@ -299,6 +496,27 @@ where
         return entry;
     }
 
+    /// Removes a key from the `HashMap`, returning the stored key and value if the key was previously in the `HashMap`.
+    ///
+    /// If the `HashMap` did not have this key present, None is returned.
+    ///
+    /// # Examples
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::thread::sleep;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    /// cache.insert(0, "a", ());
+    /// cache.insert(1, "b", ());
+    ///
+    /// assert_eq!(cache.remove_entry(&1), Some((1, "b")));
+    ///
+    /// sleep(Duration::from_millis(15));
+    /// assert_eq!(cache.remove_entry(&0), None);
+    /// ```
     #[inline]
     pub fn remove_entry<Q: ?Sized>(&mut self, k: &Q) -> Option<(K, V)>
     where
@@ -313,7 +531,12 @@ where
         let entry = match self.table.remove_entry(hash, equivalent_key(k)) {
             Some((k, v, s)) => {
                 self.exp_bucket_table.set_bucket(s.entry_id, None);
-                Some((k, v))
+
+                if self.exp_policy.is_expired(s.entry_id, &s.storage) || unlikely(s.is_removed()) {
+                    None
+                } else {
+                    Some((k, v))
+                }
             }
             None => None,
         };
@@ -332,13 +555,55 @@ where
         }
     }
 
+    /// Reserves capacity for at least `additional` more elements to be inserted in the `HashMap`. The collection may reserve more space to avoid frequent reallocations.
+    ///
+    /// This function updates internal bucket id which tracks [`EntryId`] because of bucket relocation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the new allocation size overflows usize or out of memory.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::<u32, u32, LazyFixedTTLPolicy>::new(LazyFixedTTLPolicy::new(
+    ///     Duration::from_secs(30),
+    /// ));
+    /// cache.reserve(10);
+    /// ```
     #[inline]
     pub fn reserve(&mut self, additional: usize) {
         let hasher = make_hasher::<K, _, V, Storage<P::Storage>, H>(&self.hash_builder);
-        self.table.reserve(additional, hasher);
+        self.table.try_reserve(additional, hasher).unwrap();
         self.update_bucket_id();
     }
 
+    /// Shrinks the capacity of the `HashMap` as much as possible. It will drop down as much as possible while maintaining the internal rules and possibly leaving some space in accordance with the resize policy.
+    ///
+    /// This function updates internal bucket id which tracks [`EntryId`] because of bucket relocation.
+    /// 
+    /// # Examples
+    ///
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::thread::sleep;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::with_capacity(20, LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    /// cache.insert(0, "a", ());
+    /// cache.insert(1, "b", ());
+    ///
+    /// assert!(cache.capacity() >= 20);
+    /// cache.shrink_to_fit();
+    /// assert!(cache.capacity() >= 2);
+    /// ```
     #[inline]
     pub fn shrink_to_fit(&mut self) {
         let hasher = make_hasher::<K, _, V, Storage<P::Storage>, H>(&self.hash_builder);
@@ -346,6 +611,30 @@ where
         self.update_bucket_id();
     }
 
+    /// Shrinks the capacity of the `HashMap` with a lower limit. It will drop down no lower than the supplied limit while maintaining the internal rules and possibly leaving some space in accordance with the resize policy.
+    ///
+    /// This function updates internal bucket id which tracks [`EntryId`] because of bucket relocation.
+    /// 
+    /// # Examples
+    ///
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::thread::sleep;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::with_capacity(20, LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    /// cache.insert(0, "a", ());
+    /// cache.insert(1, "b", ());
+    /// assert!(cache.capacity() >= 20);
+    ///
+    /// cache.shrink_to(10);
+    /// assert!(cache.capacity() >= 10);
+    ///
+    /// cache.shrink_to(0);
+    /// assert!(cache.capacity() >= 2);
+    /// ```
     #[inline]
     pub fn shrink_to(&mut self, min_capacity: usize) {
         let hasher = make_hasher::<K, _, V, Storage<P::Storage>, H>(&self.hash_builder);
@@ -353,13 +642,37 @@ where
         self.update_bucket_id();
     }
 
+    /// Clears the `Hashmap`, returning all key-value pairs as an iterator. Keeps the allocated memory for reuse.
+    ///
+    /// When drop, this function also triggers internal [`ExpirePolicy::clear`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::thread::sleep;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    /// cache.insert(0, "a", ());
+    /// cache.insert(1, "b", ());
+    ///
+    /// for (k, v) in cache.drain() {
+    ///     assert!(k == 0 || k == 1);
+    ///     assert!(v == "a" || v == "b");
+    /// }
+    ///
+    /// assert!(cache.is_empty());
+    /// ```
     #[inline]
     pub fn drain(&mut self) -> Drain<'_, K, V, P> {
         self.exp_backlog = SegQueue::new();
 
         Drain {
             inner: self.table.drain(),
-            exp_policy: &self.exp_policy,
+            policy: &mut self.exp_policy,
         }
     }
 }
@@ -368,6 +681,22 @@ impl<K, V, P, H> HashMap<K, V, P, H>
 where
     P: ExpirePolicy,
 {
+    /// Clears the map, removing all key-value pairs. Keeps the allocated memory for reuse.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::thread::sleep;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    /// cache.insert(0, "a", ());
+    /// cache.clear();
+    /// assert!(cache.is_empty());
+    /// ```
     #[inline]
     pub fn clear(&mut self) {
         self.table.clear();
@@ -377,106 +706,328 @@ where
         self.exp_bucket_table.clear();
     }
 
+    /// Returns the exact number of elements in the `HashMap`.
+    ///
+    /// This functions is accurate than [`HashMap::len_approx`] but uses slower algorithm `O(n)`.
+    /// # Examples
+    ///
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::thread::sleep;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    /// assert_eq!(cache.len(), 0);
+    /// cache.insert(0, "a", ());
+    /// assert_eq!(cache.len(), 1);
+    /// ```
     #[inline]
     pub fn len(&self) -> usize {
+        self.iter().count()
+    }
+
+    /// Returns the number of elements in the `HashMap`.
+    /// 
+    /// This function may contains count of elements in the `HashMap` that is not actually removed from internal table.
+    /// 
+    /// # Examples
+    /// 
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::thread::sleep;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    /// assert_eq!(cache.len_approx(), 0);
+    /// cache.insert(0, "a", ());
+    /// assert_eq!(cache.len_approx(), 1);
+    /// 
+    /// sleep(Duration::from_millis(10));
+    /// assert_eq!(cache.len(), 0);
+    /// assert_eq!(cache.len_approx(), 1);
+    /// ```
+    #[inline]
+    pub fn len_approx(&self) -> usize {
         self.table.len()
     }
 
+    ///
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::thread::sleep;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::<u32, u32, _>::with_capacity(
+    ///     20,
+    ///     LazyFixedTTLPolicy::new(Duration::from_millis(10)),
+    /// );
+    /// assert!(cache.capacity() >= 20);
+    /// ```
     #[inline]
     pub fn capacity(&self) -> usize {
         self.table.capacity()
     }
 
+    /// Returns `true` if the map contains no elements.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::thread::sleep;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    /// assert!(cache.is_empty());
+    /// cache.insert(0, "a", ());
+    /// assert!(!cache.is_empty());
+    ///
+    /// sleep(Duration::from_millis(10));
+    ///
+    /// assert!(cache.is_empty());
+    /// ```
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
+    /// An iterator visiting all key-value pairs in arbitrary order. The iterator element type is `(&'a K, &'a V)`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::thread::sleep;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    /// cache.insert(0, "a", ());
+    /// cache.insert(1, "b", ());
+    /// cache.insert(2, "c", ());
+    /// 
+    /// for (k, v) in cache.iter() {
+    ///     println!("key: {}, val: {}", k, v);
+    /// }
+    /// ```
     #[inline]
-    pub fn iter(&self) -> Iter<'_, K, V, Storage<P::Storage>> {
+    pub fn iter(&self) -> Iter<'_, K, V, P> {
         unsafe {
             Iter {
                 inner: self.table.iter(),
+                policy: &self.exp_policy,
                 marker: PhantomData,
             }
         }
     }
 
+    /// An iterator visiting all key-value pairs in arbitrary order, with mutable references to the values. The iterator element type is `(&'a K, &'a mut V)`.
+    /// 
+    /// # Examples
+    /// 
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::thread::sleep;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    /// cache.insert(0, 0, ());
+    /// cache.insert(1, 1, ());
+    /// cache.insert(2, 2, ());
+    /// 
+    /// for (_, v) in cache.iter_mut() {
+    ///     *v *= 2;
+    /// }
+    /// 
+    /// for (k, v) in cache.iter() {
+    ///     println!("key: {}, val: {}", k, v);
+    /// }
+    /// ```
     #[inline]
-    pub fn iter_mut(&mut self) -> IterMut<'_, K, V, Storage<P::Storage>> {
+    pub fn iter_mut(&mut self) -> IterMut<'_, K, V, P> {
         unsafe {
             IterMut {
                 inner: self.table.iter(),
+                policy: &self.exp_policy,
                 marker: PhantomData,
             }
         }
     }
 
+    /// An iterator visiting all values in arbitrary order. The iterator element type is `&'a V`.
+    /// 
+    /// # Examples
+    /// 
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::thread::sleep;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    /// cache.insert(0, "a", ());
+    /// cache.insert(1, "b", ());
+    /// cache.insert(2, "c", ());
+    /// 
+    /// for v in cache.values() {
+    ///     println!("{}", v);
+    /// }
+    /// ```
     #[inline]
-    pub fn values(&self) -> Values<'_, K, V, Storage<P::Storage>> {
+    pub fn values(&self) -> Values<'_, K, V, P> {
         Values { inner: self.iter() }
     }
 
+    /// An iterator visiting all values mutably in arbitrary order. The iterator element type is `&'a mut V`.
+    /// 
+    /// # Examples
+    /// 
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::thread::sleep;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    /// cache.insert(0, 0, ());
+    /// cache.insert(1, 1, ());
+    /// cache.insert(2, 2, ());
+    /// 
+    /// for v in cache.values_mut() {
+    ///     *v = *v + 6;
+    /// }
+    /// 
+    /// for v in map.values() {
+    ///     println!("{}", v);
+    /// }
+    /// ```
     #[inline]
-    pub fn values_mut(&mut self) -> ValuesMut<'_, K, V, Storage<P::Storage>> {
+    pub fn values_mut(&mut self) -> ValuesMut<'_, K, V, P> {
         ValuesMut {
             inner: self.iter_mut(),
         }
     }
 
+    /// An iterator visiting all keys in arbitrary order. The iterator element type is `&'a K`.
+    /// 
+    /// # Examples
+    /// 
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::thread::sleep;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    /// cache.insert(0, "a", ());
+    /// cache.insert(1, "b", ());
+    /// cache.insert(2, "c", ());
+    /// 
+    /// for v in cache.keys() {
+    ///     println!("{}", v);
+    /// }
+    /// ```
     #[inline]
-    pub fn keys(&self) -> Keys<'_, K, V, Storage<P::Storage>> {
+    pub fn keys(&self) -> Keys<'_, K, V, P> {
         Keys { inner: self.iter() }
     }
+}
 
-    #[inline]
-    pub fn keys_mut(&mut self) -> KeysMut<'_, K, V, Storage<P::Storage>> {
-        KeysMut {
-            inner: self.iter_mut(),
+#[derive(Clone)]
+pub struct Iter<'a, K, V, P>
+where
+    P: ExpirePolicy,
+{
+    inner: RawIter<(K, V, Storage<P::Storage>)>,
+    policy: &'a P,
+    marker: PhantomData<(&'a K, &'a V, &'a P)>,
+}
+
+impl<'a, K, V, P> Iterator for Iter<'a, K, V, P>
+where
+    P: ExpirePolicy,
+{
+    type Item = (&'a K, &'a V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some((r, s)) = self
+            .inner
+            .next()
+            .map(|v| unsafe { v.as_ref() })
+            .map(|(k, v, s)| ((k, v), s))
+        {
+            if !self.policy.is_expired(s.entry_id, &s.storage) & !s.is_removed() {
+                Some(r)
+            } else {
+                self.next()
+            }
+        } else {
+            None
         }
     }
 }
 
-#[derive(Clone)]
-pub struct Iter<'a, K, V, P> {
-    inner: RawIter<(K, V, P)>,
+pub struct IterMut<'a, K, V, P>
+where
+    P: ExpirePolicy,
+{
+    inner: RawIter<(K, V, Storage<P::Storage>)>,
+    policy: &'a P,
     marker: PhantomData<(&'a K, &'a V, &'a P)>,
 }
 
-impl<'a, K, V, P> Iterator for Iter<'a, K, V, P> {
-    type Item = (&'a K, &'a V);
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.inner
-            .next()
-            .map(|v| unsafe { v.as_ref() })
-            .map(|(k, v, _)| (k, v))
-    }
-}
-
-#[derive(Clone)]
-pub struct IterMut<'a, K, V, P> {
-    inner: RawIter<(K, V, P)>,
-    marker: PhantomData<(&'a K, &'a V, &'a P)>,
-}
-
-impl<'a, K, V, P> Iterator for IterMut<'a, K, V, P> {
+impl<'a, K, V, P> Iterator for IterMut<'a, K, V, P>
+where
+    P: ExpirePolicy,
+{
     type Item = (&'a mut K, &'a mut V);
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.inner
+        if let Some((r, s)) = self
+            .inner
             .next()
             .map(|v| unsafe { v.as_mut() })
-            .map(|(k, v, _)| (k, v))
+            .map(|(k, v, s)| ((k, v), s))
+        {
+            if !self.policy.is_expired(s.entry_id, &s.storage) & !s.is_removed() {
+                Some(r)
+            } else {
+                self.next()
+            }
+        } else {
+            None
+        }
     }
 }
 
-#[derive(Clone)]
-pub struct Keys<'a, K, V, P> {
+pub struct Keys<'a, K, V, P>
+where
+    P: ExpirePolicy,
+{
     inner: Iter<'a, K, V, P>,
 }
 
-impl<'a, K, V, P> Iterator for Keys<'a, K, V, P> {
+impl<'a, K, V, P> Iterator for Keys<'a, K, V, P>
+where
+    P: ExpirePolicy,
+{
     type Item = &'a K;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -484,25 +1035,17 @@ impl<'a, K, V, P> Iterator for Keys<'a, K, V, P> {
     }
 }
 
-#[derive(Clone)]
-pub struct KeysMut<'a, K, V, P> {
-    inner: IterMut<'a, K, V, P>,
-}
-
-impl<'a, K, V, P> Iterator for KeysMut<'a, K, V, P> {
-    type Item = &'a mut K;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.inner.next().map(|(k, _)| k)
-    }
-}
-
-#[derive(Clone)]
-pub struct Values<'a, K, V, P> {
+pub struct Values<'a, K, V, P>
+where
+    P: ExpirePolicy,
+{
     inner: Iter<'a, K, V, P>,
 }
 
-impl<'a, K, V, P> Iterator for Values<'a, K, V, P> {
+impl<'a, K, V, P> Iterator for Values<'a, K, V, P>
+where
+    P: ExpirePolicy,
+{
     type Item = &'a V;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -510,12 +1053,17 @@ impl<'a, K, V, P> Iterator for Values<'a, K, V, P> {
     }
 }
 
-#[derive(Clone)]
-pub struct ValuesMut<'a, K, V, P> {
+pub struct ValuesMut<'a, K, V, P>
+where
+    P: ExpirePolicy,
+{
     inner: IterMut<'a, K, V, P>,
 }
 
-impl<'a, K, V, P> Iterator for ValuesMut<'a, K, V, P> {
+impl<'a, K, V, P> Iterator for ValuesMut<'a, K, V, P>
+where
+    P: ExpirePolicy,
+{
     type Item = &'a mut V;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -528,7 +1076,7 @@ where
     P: ExpirePolicy,
 {
     inner: RawDrain<'a, (K, V, Storage<P::Storage>)>,
-    exp_policy: &'a P,
+    policy: &'a mut P,
 }
 
 impl<'a, K, V, P> Iterator for Drain<'a, K, V, P>
@@ -538,14 +1086,24 @@ where
     type Item = (K, V);
 
     fn next(&mut self) -> Option<Self::Item> {
-        while let Some(this) = self.inner.next() {
-            if self.exp_policy.is_expired(this.2.entry_id, &this.2.storage) {
-                continue;
+        if let Some((r, s)) = self.inner.next().map(|(k, v, s)| ((k, v), s)) {
+            if !self.policy.is_expired(s.entry_id, &s.storage) & !s.is_removed() {
+                Some(r)
             } else {
-                return Some((this.0, this.1));
+                self.next()
             }
+        } else {
+            None
         }
-        None
+    }
+}
+
+impl<'a, K, V, P> Drop for Drain<'a, K, V, P>
+where
+    P: ExpirePolicy,
+{
+    fn drop(&mut self) {
+        self.policy.clear();
     }
 }
 
@@ -722,7 +1280,7 @@ mod test_map {
 
     #[test]
     fn test_reserve() {
-        let mut map = HashMap::<u32, u32, MockPolicy>::new(MockPolicy::new());
+        let mut map = HashMap::<u32, u32, _>::new(MockPolicy::new());
 
         assert_eq!(map.capacity(), 0);
 
