@@ -644,7 +644,7 @@ where
 
     /// Clears the `Hashmap`, returning all key-value pairs as an iterator. Keeps the allocated memory for reuse.
     ///
-    /// When drop, this function also triggers internal [`ExpirePolicy::clear`].
+    /// When drop, this function also triggers internal [`ExpirePolicy::clear()`].
     ///
     /// # Examples
     ///
@@ -708,7 +708,7 @@ where
 
     /// Returns the exact number of elements in the `HashMap`.
     ///
-    /// This functions is accurate than [`HashMap::len_approx`] but uses slower algorithm `O(n)`.
+    /// This functions is accurate than [`HashMap::len_approx()`] but uses slower algorithm `O(n)`.
     /// # Examples
     ///
     /// ```
