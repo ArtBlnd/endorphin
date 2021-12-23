@@ -4,6 +4,8 @@ description = "Key-Value based in-memory cache library which supports Custom Exp
 license-file = "LICENSE.txt"
 version = "0.1.2"
 edition = "2018"
+categories = ["caching"]
+keywords = ["cache", "ttl", "hashmap", "tti", "caching"]
 
 
 [dependencies]
