@@ -2,7 +2,7 @@
 name = "endorphin"
 description = "Key-Value based in-memory cache library which supports Custom Expiration Policies"
 license-file = "LICENSE.txt"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2018"
 
 
