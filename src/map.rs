@@ -424,12 +424,13 @@ where
                     .set_bucket(storage.entry_id, Some(bucket.clone()));
 
                 let old_s = mem::replace(old_s, storage);
+                let old_v = mem::replace(old_v, v);
                 if self.exp_policy.is_expired(old_s.entry_id, &old_s.storage)
                     || unlikely(old_s.is_removed())
                 {
                     (bucket, None)
                 } else {
-                    (bucket, Some(mem::replace(old_v, v)))
+                    (bucket, Some(old_v))
                 }
             } else {
                 let bucket = match self.table.try_insert_no_grow(hash, (k, v, storage)) {
