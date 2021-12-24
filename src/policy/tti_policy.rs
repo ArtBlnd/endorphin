@@ -6,8 +6,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use atomic::{Atomic, Ordering};
-use parking_lot::{Mutex, RwLock};
+use parking_lot::{Mutex, RwLock, RwLockUpgradableReadGuard};
 
 #[derive(Clone)]
 pub struct TTIStorage {
@@ -39,7 +38,7 @@ impl TTIStorage {
 
 pub struct TTIPolicy {
     tti_records: RwLock<BTreeMap<Instant, Vec<Option<(EntryId, TTIStorage)>>>>,
-    tti_last_update: Atomic<Instant>,
+    tti_last_update: RwLock<Instant>,
     presision: Duration,
 }
 
@@ -54,7 +53,7 @@ impl TTIPolicy {
     pub fn with_presision(presision: Duration) -> Self {
         Self {
             tti_records: RwLock::new(BTreeMap::new()),
-            tti_last_update: Atomic::new(Instant::now()),
+            tti_last_update: RwLock::new(Instant::now()),
             presision,
         }
     }
@@ -79,20 +78,18 @@ impl ExpirePolicy for TTIPolicy {
 
     fn on_access(&self, _: EntryId, _: &Self::Storage) -> Command {
         let now = Instant::now();
-        loop {
-            let last_update = self.tti_last_update.load(Ordering::Relaxed);
-            if likely(last_update + self.presision > now) {
-                return Command::Noop;
-            }
+        let last_update = self.tti_last_update.upgradable_read();
 
-            if self
-                .tti_last_update
-                .compare_exchange_weak(last_update, now, Ordering::Acquire, Ordering::Relaxed)
-                .is_ok()
-            {
-                break;
-            }
+        if likely(*last_update + self.presision > now) {
+            return Command::Noop;
         }
+
+        let mut last_update = match RwLockUpgradableReadGuard::try_upgrade(last_update) {
+            Ok(v) => v,
+            Err(_) => return Command::Noop,
+        };
+
+        *last_update = now;
 
         // if target entry did not expired yet...
         let mut records = self.tti_records.write();

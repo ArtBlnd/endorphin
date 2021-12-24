@@ -586,7 +586,7 @@ where
     /// Shrinks the capacity of the `HashMap` as much as possible. It will drop down as much as possible while maintaining the internal rules and possibly leaving some space in accordance with the resize policy.
     ///
     /// This function updates internal bucket id which tracks [`EntryId`] because of bucket relocation.
-    /// 
+    ///
     /// # Examples
     ///
     /// ```
@@ -614,7 +614,7 @@ where
     /// Shrinks the capacity of the `HashMap` with a lower limit. It will drop down no lower than the supplied limit while maintaining the internal rules and possibly leaving some space in accordance with the resize policy.
     ///
     /// This function updates internal bucket id which tracks [`EntryId`] because of bucket relocation.
-    /// 
+    ///
     /// # Examples
     ///
     /// ```
@@ -729,11 +729,11 @@ where
     }
 
     /// Returns the number of elements in the `HashMap`.
-    /// 
+    ///
     /// This function may contains count of elements in the `HashMap` that is not actually removed from internal table.
-    /// 
+    ///
     /// # Examples
-    /// 
+    ///
     /// ```
     /// use endorphin::policy::LazyFixedTTLPolicy;
     /// use endorphin::HashMap;
@@ -745,7 +745,7 @@ where
     /// assert_eq!(cache.len_approx(), 0);
     /// cache.insert(0, "a", ());
     /// assert_eq!(cache.len_approx(), 1);
-    /// 
+    ///
     /// sleep(Duration::from_millis(10));
     /// assert_eq!(cache.len(), 0);
     /// assert_eq!(cache.len_approx(), 1);
@@ -817,7 +817,7 @@ where
     /// cache.insert(0, "a", ());
     /// cache.insert(1, "b", ());
     /// cache.insert(2, "c", ());
-    /// 
+    ///
     /// for (k, v) in cache.iter() {
     ///     println!("key: {}, val: {}", k, v);
     /// }
@@ -834,9 +834,9 @@ where
     }
 
     /// An iterator visiting all key-value pairs in arbitrary order, with mutable references to the values. The iterator element type is `(&'a K, &'a mut V)`.
-    /// 
+    ///
     /// # Examples
-    /// 
+    ///
     /// ```
     /// use endorphin::policy::LazyFixedTTLPolicy;
     /// use endorphin::HashMap;
@@ -848,11 +848,11 @@ where
     /// cache.insert(0, 0, ());
     /// cache.insert(1, 1, ());
     /// cache.insert(2, 2, ());
-    /// 
+    ///
     /// for (_, v) in cache.iter_mut() {
     ///     *v *= 2;
     /// }
-    /// 
+    ///
     /// for (k, v) in cache.iter() {
     ///     println!("key: {}, val: {}", k, v);
     /// }
@@ -869,9 +869,9 @@ where
     }
 
     /// An iterator visiting all values in arbitrary order. The iterator element type is `&'a V`.
-    /// 
+    ///
     /// # Examples
-    /// 
+    ///
     /// ```
     /// use endorphin::policy::LazyFixedTTLPolicy;
     /// use endorphin::HashMap;
@@ -883,7 +883,7 @@ where
     /// cache.insert(0, "a", ());
     /// cache.insert(1, "b", ());
     /// cache.insert(2, "c", ());
-    /// 
+    ///
     /// for v in cache.values() {
     ///     println!("{}", v);
     /// }
@@ -894,9 +894,9 @@ where
     }
 
     /// An iterator visiting all values mutably in arbitrary order. The iterator element type is `&'a mut V`.
-    /// 
+    ///
     /// # Examples
-    /// 
+    ///
     /// ```
     /// use endorphin::policy::LazyFixedTTLPolicy;
     /// use endorphin::HashMap;
@@ -908,11 +908,11 @@ where
     /// cache.insert(0, 0, ());
     /// cache.insert(1, 1, ());
     /// cache.insert(2, 2, ());
-    /// 
+    ///
     /// for v in cache.values_mut() {
     ///     *v = *v + 6;
     /// }
-    /// 
+    ///
     /// for v in map.values() {
     ///     println!("{}", v);
     /// }
@@ -925,9 +925,9 @@ where
     }
 
     /// An iterator visiting all keys in arbitrary order. The iterator element type is `&'a K`.
-    /// 
+    ///
     /// # Examples
-    /// 
+    ///
     /// ```
     /// use endorphin::policy::LazyFixedTTLPolicy;
     /// use endorphin::HashMap;
@@ -939,7 +939,7 @@ where
     /// cache.insert(0, "a", ());
     /// cache.insert(1, "b", ());
     /// cache.insert(2, "c", ());
-    /// 
+    ///
     /// for v in cache.keys() {
     ///     println!("{}", v);
     /// }
@@ -1105,6 +1105,33 @@ where
     fn drop(&mut self) {
         self.policy.clear();
     }
+}
+
+pub enum Entry<'a, K, V, P, H>
+where
+    P: ExpirePolicy,
+{
+    Occupied(OccupiedEntry<'a, K, V, P, H>),
+    Vacant(),
+}
+
+pub struct OccupiedEntry<'a, K, V, P, H>
+where
+    P: ExpirePolicy,
+{
+    hash: u64,
+    key: Option<K>,
+    elem: Bucket<(K, V)>,
+    table: &'a mut HashMap<K, V, P, H>,
+}
+
+pub struct VacantEntry<'a, K, V, P, H>
+where
+    P: ExpirePolicy,
+{
+    hash: u64,
+    key: K,
+    table: &'a mut HashMap<K, V, P, H>,
 }
 
 #[cfg(test)]

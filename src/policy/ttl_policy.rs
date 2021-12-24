@@ -5,12 +5,11 @@ use crate::EntryId;
 use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use atomic::{Atomic, Ordering};
-use parking_lot::RwLock;
+use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 
 pub struct TTLPolicy {
     ttl_records: RwLock<BTreeMap<Instant, Vec<Option<EntryId>>>>,
-    ttl_last_update: Atomic<Instant>,
+    ttl_last_update: RwLock<Instant>,
     presision: Duration,
 }
 
@@ -25,7 +24,7 @@ impl TTLPolicy {
     pub fn with_presision(presision: Duration) -> Self {
         Self {
             ttl_records: RwLock::new(BTreeMap::new()),
-            ttl_last_update: Atomic::new(Instant::now()),
+            ttl_last_update: RwLock::new(Instant::now()),
             presision,
         }
     }
@@ -50,20 +49,18 @@ impl ExpirePolicy for TTLPolicy {
 
     fn on_access(&self, _: EntryId, _: &Self::Storage) -> Command {
         let now = Instant::now();
-        loop {
-            let last_update = self.ttl_last_update.load(Ordering::Relaxed);
-            if likely(last_update + self.presision > now) {
-                return Command::Noop;
-            }
+        let last_update = self.ttl_last_update.upgradable_read();
 
-            if self
-                .ttl_last_update
-                .compare_exchange_weak(last_update, now, Ordering::Acquire, Ordering::Relaxed)
-                .is_ok()
-            {
-                break;
-            }
+        if likely(*last_update + self.presision > now) {
+            return Command::Noop;
         }
+
+        let mut last_update = match RwLockUpgradableReadGuard::try_upgrade(last_update) {
+            Ok(v) => v,
+            Err(_) => return Command::Noop,
+        };
+
+        *last_update = now;
 
         // if target entry did not expired yet...
         let mut records = self.ttl_records.write();
