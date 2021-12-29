@@ -23,15 +23,6 @@ where
 }
 
 #[cfg_attr(feature = "inline-more", inline)]
-pub(crate) fn equivalent<Q, K>(k: &Q) -> impl Fn(&K) -> bool + '_ + Clone
-where
-    K: Borrow<Q>,
-    Q: ?Sized + Eq,
-{
-    move |x| k.eq(x.borrow())
-}
-
-#[cfg_attr(feature = "inline-more", inline)]
 pub(crate) fn make_hash<K, Q, H>(hash_builder: &H, val: &Q) -> u64
 where
     K: Borrow<Q>,

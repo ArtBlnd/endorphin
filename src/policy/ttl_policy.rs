@@ -48,10 +48,6 @@ impl ExpirePolicy for TTLPolicy {
     }
 
     fn on_access(&self, _: EntryId, _: &Self::Storage) -> Command {
-        if self.ttl_records.read().is_empty() {
-            return Command::Noop;
-        }
-
         let now = Instant::now();
         let last_update = self.ttl_last_update.upgradable_read();
         
@@ -66,7 +62,7 @@ impl ExpirePolicy for TTLPolicy {
 
         *last_update = now;
 
-        // if target entry did not expired yet...
+        // Extract all items that has been expired maximum to 16.
         let mut records = self.ttl_records.write();
         let mut expired_values = Vec::new();
         for _ in 0..16 {
