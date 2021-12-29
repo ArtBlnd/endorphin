@@ -1454,6 +1454,13 @@ mod test_map {
     }
 
     #[test]
+    fn test_with_capacity() {
+        let map = HashMap::<i32, i32, _>::with_capacity(20, MockPolicy::new());
+
+        assert!(map.capacity() >= 20);
+    }
+
+    #[test]
     fn test_insert() {
         let mut map = HashMap::new(MockPolicy::new());
 
@@ -1551,6 +1558,10 @@ mod test_map {
         assert_eq!(map.remove(&0).unwrap(), 1);
 
         assert_eq!(map.contains_key(&0), false);
+
+        assert_eq!(map.contains_key(&10), false);
+
+        assert_eq!(map.remove(&10), None);
     }
 
     #[test]
