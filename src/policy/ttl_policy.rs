@@ -48,9 +48,13 @@ impl ExpirePolicy for TTLPolicy {
     }
 
     fn on_access(&self, _: EntryId, _: &Self::Storage) -> Command {
+        if self.ttl_records.read().is_empty() {
+            return Command::Noop;
+        }
+
         let now = Instant::now();
         let last_update = self.ttl_last_update.upgradable_read();
-
+        
         if likely(*last_update + self.presision > now) {
             return Command::Noop;
         }
@@ -64,18 +68,27 @@ impl ExpirePolicy for TTLPolicy {
 
         // if target entry did not expired yet...
         let mut records = self.ttl_records.write();
-        let expires_at = if let Some(v) = records.keys().next() {
-            v.clone()
-        } else {
-            return Command::Noop;
-        };
+        let mut expired_values = Vec::new();
+        for _ in 0..16 {
+            let expires_at = if let Some(k) = records.keys().next() {
+                k.clone()
+            } else {
+                break;
+            };
 
-        // target entry did not expired yet.
-        if expires_at > now {
-            return Command::Noop;
+            if expires_at > now {
+                break;
+            }
+
+            let v = records.remove(&expires_at).unwrap();
+            expired_values.extend_from_slice(&v);
         }
 
-        Command::RemoveBulk(records.remove(&expires_at).unwrap())
+        if expired_values.is_empty() {
+            Command::Noop
+        } else {
+            Command::RemoveBulk(expired_values)
+        }
     }
 
     fn on_insert(&self, entry: EntryId, expire_at: &Self::Storage) -> Command {
