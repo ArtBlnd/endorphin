@@ -213,6 +213,49 @@ where
         self.exp_backlog.push(removed);
     }
 
+    unsafe fn raw_insert(
+        &mut self,
+        k: K,
+        v: V,
+        init: P::Info,
+    ) -> (Bucket<(K, V, Storage<P::Storage>)>, Option<V>) {
+        // try to process single backlog when on every mutable state.
+        self.process_single_backlog();
+
+        let hash = make_insert_hash::<K, H>(&self.hash_builder, &k);
+
+        // initialize storage with info value.
+        let s = self.exp_policy.init_storage(init);
+        let storage = Storage::new(s, self.exp_bucket_table.acquire_slot());
+
+        if let Some((_, old_v, old_s)) = self.table.get_mut(hash, equivalent_key(&k)) {
+            let bucket = self.exp_bucket_table.get(old_s.entry_id).unwrap();
+
+            // we need to mark it as removed. but not releasing id.
+            // and assign a new id to track it.
+            self.exp_bucket_table.set_bucket(old_s.entry_id, None);
+            self.exp_bucket_table
+                .set_bucket(storage.entry_id, Some(bucket.clone()));
+
+            let old_s = mem::replace(old_s, storage);
+            let old_v = mem::replace(old_v, v);
+            if self.exp_policy.is_expired(old_s.entry_id, &old_s.storage)
+                || unlikely(old_s.is_removed())
+            {
+                (bucket, None)
+            } else {
+                (bucket, Some(old_v))
+            }
+        } else {
+            let bucket = match self.table.try_insert_no_grow(hash, (k, v, storage)) {
+                Ok(bucket) => bucket,
+                Err(v) => self.grow_and_insert(hash, v),
+            };
+
+            (bucket, None)
+        }
+    }
+
     /// Returns a reference to the value corresponding to the key.
     ///
     /// If the entry is expired, returns `None`
@@ -404,42 +447,7 @@ where
     /// ```
     #[inline]
     pub fn insert(&mut self, k: K, v: V, init: P::Info) -> Option<V> {
-        // try to process single backlog when on every mutable state.
-        self.process_single_backlog();
-
-        let hash = make_insert_hash::<K, H>(&self.hash_builder, &k);
-
-        // initialize storage with info value.
-        let s = self.exp_policy.init_storage(init);
-        let storage = Storage::new(s, self.exp_bucket_table.acquire_slot());
-
-        let (bucket, old_v) =
-            if let Some((_, old_v, old_s)) = self.table.get_mut(hash, equivalent_key(&k)) {
-                let bucket = self.exp_bucket_table.get(old_s.entry_id).unwrap();
-
-                // we need to mark it as removed. but not releasing id.
-                // and assign a new id to track it.
-                self.exp_bucket_table.set_bucket(old_s.entry_id, None);
-                self.exp_bucket_table
-                    .set_bucket(storage.entry_id, Some(bucket.clone()));
-
-                let old_s = mem::replace(old_s, storage);
-                let old_v = mem::replace(old_v, v);
-                if self.exp_policy.is_expired(old_s.entry_id, &old_s.storage)
-                    || unlikely(old_s.is_removed())
-                {
-                    (bucket, None)
-                } else {
-                    (bucket, Some(old_v))
-                }
-            } else {
-                let bucket = match self.table.try_insert_no_grow(hash, (k, v, storage)) {
-                    Ok(bucket) => bucket,
-                    Err(v) => self.grow_and_insert(hash, v),
-                };
-
-                (bucket, None)
-            };
+        let (bucket, old_v) = unsafe { self.raw_insert(k, v, init) };
 
         let (_, _, s) = unsafe { bucket.as_mut() };
         self.exp_bucket_table.set_bucket(s.entry_id, Some(bucket));
@@ -641,6 +649,27 @@ where
         let hasher = make_hasher::<K, _, V, Storage<P::Storage>, H>(&self.hash_builder);
         self.table.shrink_to(min_capacity, hasher);
         self.update_bucket_id();
+    }
+
+    pub fn entry(&mut self, key: K) -> Entry<'_, K, V, P, H> {
+        let hash = make_insert_hash(&self.hash_builder, &key);
+
+        if let Some(elem) = self.table.find(hash, equivalent_key(&key)) {
+            let s = unsafe { &elem.as_ref().2 };
+            if !self.exp_policy.is_expired(s.entry_id, &s.storage) || !s.is_removed() {
+                return Entry::Occupied(OccupiedEntry {
+                    hash,
+                    key: Some(key),
+                    elem,
+                    table: self,
+                });
+            }
+        }
+        Entry::Vacant(VacantEntry {
+            hash,
+            key,
+            table: self,
+        })
     }
 
     /// Clears the `Hashmap`, returning all key-value pairs as an iterator. Keeps the allocated memory for reuse.
@@ -914,7 +943,7 @@ where
     ///     *v = *v + 6;
     /// }
     ///
-    /// for v in map.values() {
+    /// for v in cache.values() {
     ///     println!("{}", v);
     /// }
     /// ```
@@ -1113,7 +1142,78 @@ where
     P: ExpirePolicy,
 {
     Occupied(OccupiedEntry<'a, K, V, P, H>),
-    Vacant(),
+    Vacant(VacantEntry<'a, K, V, P, H>),
+}
+
+impl<'a, K, V, P, H> Entry<'a, K, V, P, H>
+where
+    P: ExpirePolicy,
+    K: Eq + Hash,
+    H: BuildHasher,
+{
+    pub fn insert(self, value: V, init: P::Info) -> OccupiedEntry<'a, K, V, P, H> {
+        match self {
+            Entry::Occupied(mut entry) => {
+                entry.insert(value, init);
+                entry
+            }
+            Entry::Vacant(entry) => entry.insert_entry(value, init),
+        }
+    }
+
+    pub fn or_insert(self, default: V, init: P::Info) -> &'a mut V {
+        match self {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => entry.insert(default, init),
+        }
+    }
+
+    pub fn or_insert_with<F: FnOnce() -> V>(self, default: F, init: P::Info) -> &'a mut V {
+        match self {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => entry.insert(default(), init),
+        }
+    }
+
+    pub fn or_insert_with_key<F: FnOnce(&K) -> V>(self, default: F, init: P::Info) -> &'a mut V {
+        match self {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => {
+                let value = default(entry.key());
+                entry.insert(value, init)
+            }
+        }
+    }
+
+    pub fn key(&self) -> &K {
+        match *self {
+            Entry::Occupied(ref entry) => entry.key(),
+            Entry::Vacant(ref entry) => entry.key(),
+        }
+    }
+
+    pub fn and_modify<F>(self, f: F) -> Self
+    where
+        F: FnOnce(&mut V),
+    {
+        match self {
+            Entry::Occupied(mut entry) => {
+                f(entry.get_mut());
+                Entry::Occupied(entry)
+            }
+            Entry::Vacant(entry) => Entry::Vacant(entry),
+        }
+    }
+
+    pub fn and_replace_entry_with<F>(self, f: F) -> Self
+    where
+        F: FnOnce(&K, V) -> Option<V>,
+    {
+        match self {
+            Entry::Occupied(entry) => entry.replace_entry_with(f),
+            Entry::Vacant(_) => self,
+        }
+    }
 }
 
 pub struct OccupiedEntry<'a, K, V, P, H>
@@ -1122,8 +1222,116 @@ where
 {
     hash: u64,
     key: Option<K>,
-    elem: Bucket<(K, V)>,
+    elem: Bucket<(K, V, Storage<P::Storage>)>,
     table: &'a mut HashMap<K, V, P, H>,
+}
+
+impl<'a, K, V, P, H> OccupiedEntry<'a, K, V, P, H>
+where
+    P: ExpirePolicy,
+    K: Eq + Hash,
+    H: BuildHasher,
+{
+    pub fn key(&self) -> &K {
+        unsafe { &self.elem.as_ref().0 }
+    }
+
+    pub fn remove_entry(self) -> (K, V) {
+        let key = unsafe { &self.elem.as_ref().0 };
+        self.table.remove_entry(key).unwrap()
+    }
+
+    pub fn get(&self) -> &V {
+        unsafe { &self.elem.as_ref().1 }
+    }
+
+    pub fn get_mut(&mut self) -> &mut V {
+        unsafe { &mut self.elem.as_mut().1 }
+    }
+
+    pub fn into_mut(self) -> &'a mut V {
+        unsafe { &mut self.elem.as_mut().1 }
+    }
+
+    pub fn insert(&mut self, value: V, init: P::Info) -> V {
+        let k = unsafe { &self.elem.as_ref().0 };
+
+        let s = self.table.exp_policy.init_storage(init);
+        let storage = Storage::new(s, self.table.exp_bucket_table.acquire_slot());
+
+        let (_, old_v, old_s) = self
+            .table
+            .table
+            .get_mut(self.hash, equivalent_key(k))
+            .unwrap();
+        let bucket = self.table.exp_bucket_table.get(old_s.entry_id).unwrap();
+
+        self.table.exp_bucket_table.set_bucket(old_s.entry_id, None);
+        self.table
+            .exp_bucket_table
+            .set_bucket(storage.entry_id, Some(bucket.clone()));
+
+        let _ = mem::replace(old_s, storage);
+        let old_v = mem::replace(old_v, value);
+
+        let (_, _, s) = unsafe { bucket.as_mut() };
+        self.table
+            .exp_bucket_table
+            .set_bucket(s.entry_id, Some(bucket));
+
+        self.table
+            .handle_status(self.table.exp_policy.on_insert(s.entry_id, &mut s.storage));
+
+        old_v
+    }
+
+    pub fn remove(self) -> V {
+        self.table.remove(unsafe { &self.elem.as_ref().0 }).unwrap()
+    }
+
+    pub fn replace_entry(self, value: V) -> (K, V) {
+        let entry = unsafe { self.elem.as_mut() };
+
+        let old_key = mem::replace(&mut entry.0, self.key.unwrap());
+        let old_value = mem::replace(&mut entry.1, value);
+
+        (old_key, old_value)
+    }
+
+    pub fn replace_key(self) -> K {
+        let entry = unsafe { self.elem.as_mut() };
+        mem::replace(&mut entry.0, self.key.unwrap())
+    }
+
+    pub fn replace_entry_with<F>(self, f: F) -> Entry<'a, K, V, P, H>
+    where
+        F: FnOnce(&K, V) -> Option<V>,
+    {
+        unsafe {
+            let mut spare_key = None;
+
+            self.table
+                .table
+                .replace_bucket_with(self.elem.clone(), |(key, value, policy)| {
+                    if let Some(new_value) = f(&key, value) {
+                        Some((key, new_value, policy))
+                    } else {
+                        spare_key = Some(key);
+                        None
+                    }
+                });
+
+            if let Some(key) = spare_key {
+                Entry::Vacant(VacantEntry {
+                    hash: self.hash,
+                    key,
+                    table: self.table,
+                })
+            } else {
+                Entry::Occupied(self)
+            }
+        }
+    }
 }
 
 pub struct VacantEntry<'a, K, V, P, H>
@@ -1133,6 +1341,60 @@ where
     hash: u64,
     key: K,
     table: &'a mut HashMap<K, V, P, H>,
+}
+
+impl<'a, K, V, P, H> VacantEntry<'a, K, V, P, H>
+where
+    P: ExpirePolicy,
+    K: Eq,
+{
+    pub fn key(&self) -> &K {
+        &self.key
+    }
+
+    pub fn into_key(self) -> K {
+        self.key
+    }
+
+    pub fn insert(self, value: V, init: P::Info) -> &'a mut V
+    where
+        K: Hash,
+        H: BuildHasher,
+    {
+        let bucket = unsafe { self.table.raw_insert(self.key, value, init).0 };
+        let (_, _, s) = unsafe { bucket.as_mut() };
+        self.table
+            .exp_bucket_table
+            .set_bucket(s.entry_id, Some(bucket.clone()));
+
+        self.table
+            .handle_status(self.table.exp_policy.on_insert(s.entry_id, &mut s.storage));
+
+        unsafe { &mut bucket.as_mut().1 }
+    }
+
+    pub fn insert_entry(self, value: V, init: P::Info) -> OccupiedEntry<'a, K, V, P, H>
+    where
+        K: Hash,
+        H: BuildHasher,
+    {
+        let elem = unsafe { self.table.raw_insert(self.key, value, init).0 };
+
+        let (_, _, s) = unsafe { elem.as_mut() };
+        self.table
+            .exp_bucket_table
+            .set_bucket(s.entry_id, Some(elem.clone()));
+
+        self.table
+            .handle_status(self.table.exp_policy.on_insert(s.entry_id, &mut s.storage));
+
+        OccupiedEntry {
+            hash: self.hash,
+            key: None,
+            elem,
+            table: self.table,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1418,5 +1680,356 @@ mod test_map {
 
         map.remove(&2);
         assert_eq!(map.len(), 0);
+    }
+
+    #[test]
+    fn test_entry() {
+        use super::Entry;
+        let mut map = HashMap::new(MockPolicy::new());
+        map.insert(0, 0, ());
+
+        match map.entry(0) {
+            Entry::Occupied(_) => assert!(true),
+            Entry::Vacant(_) => unreachable!(),
+        }
+
+        match map.entry(1) {
+            Entry::Occupied(_) => unreachable!(),
+            Entry::Vacant(_) => assert!(true),
+        }
+    }
+
+    #[test]
+    fn test_entry_insert() {
+        let mut map = HashMap::new(MockPolicy::new());
+
+        let mut entry = map.entry(0).insert("0", ());
+        assert_eq!(entry.get(), &"0");
+
+        entry.insert("1", ());
+        assert_eq!(map.get(&0).unwrap(), &"1");
+    }
+
+    #[test]
+    fn test_entry_or_insert() {
+        let mut map = HashMap::new(MockPolicy::new());
+
+        assert_eq!(map.entry(0).or_insert(0, ()), &0);
+        assert_eq!(map.get(&0).unwrap(), &0);
+
+        *map.entry(0).or_insert(0, ()) += 5;
+        assert_eq!(map.entry(0).or_insert(0, ()), &5);
+        assert_eq!(map.get(&0).unwrap(), &5);
+    }
+
+    #[test]
+    fn test_entry_or_insert_with() {
+        let five = || 5;
+
+        let mut map = HashMap::new(MockPolicy::new());
+
+        assert_eq!(map.entry(0).or_insert_with(five, ()), &five());
+
+        *map.entry(0).or_insert_with(five, ()) *= 2;
+
+        assert_eq!(map.entry(0).or_insert_with(five, ()), &(five() * 2));
+        assert_eq!(map.get(&0).unwrap(), &(five() * 2));
+    }
+
+    #[test]
+    fn test_entry_or_insert_with_key() {
+        let mut map = HashMap::new(MockPolicy::new());
+
+        assert_eq!(map.entry(0).or_insert_with_key(|x| x + 1, ()), &1);
+        *map.entry(0).or_insert_with_key(|x| x + 1, ()) += 5;
+
+        assert_eq!(map.entry(0).or_insert_with_key(|x| x + 1, ()), &6);
+        assert_eq!(map.get(&0).unwrap(), &6);
+    }
+
+    #[test]
+    fn test_entry_key() {
+        let mut map = HashMap::<_, u32, _>::new(MockPolicy::new());
+
+        for i in 0..100 {
+            assert_eq!(map.entry(i).key(), &i);
+        }
+    }
+
+    #[test]
+    fn test_entry_and_modify() {
+        let mut map = HashMap::new(MockPolicy::new());
+        map.insert(0, 0, ());
+
+        let now = map
+            .entry(0)
+            .and_modify(|v| *v = *v + 5)
+            .and_modify(|v| *v = *v * 10);
+        assert_eq!(now.or_insert(0, ()), &50);
+        assert_eq!(map.get(&0).unwrap(), &50);
+    }
+
+    #[test]
+    fn test_entry_and_replace_entry_with() {
+        let mut map = HashMap::new(MockPolicy::new());
+        map.insert(1, 10, ());
+
+        map.entry(1).and_replace_entry_with(|k, v| Some(k + v));
+
+        assert_eq!(map.get(&1).unwrap(), &11);
+    }
+
+    #[test]
+    fn test_occupied_entry_key() {
+        use super::Entry;
+        let mut map = HashMap::new(MockPolicy::new());
+        map.insert(1, 10, ());
+
+        match map.entry(1) {
+            Entry::Occupied(entry) => assert_eq!(entry.key(), &1),
+            Entry::Vacant(_) => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn test_occupied_entry_remove_entry() {
+        use super::Entry;
+        let mut map = HashMap::new(MockPolicy::new());
+        map.insert(1, 10, ());
+
+        match map.entry(1) {
+            Entry::Occupied(entry) => assert_eq!(entry.remove_entry(), (1, 10)),
+            Entry::Vacant(_) => unreachable!(),
+        }
+
+        assert_eq!(map.get(&1), None);
+    }
+
+    #[test]
+    fn test_occupied_entry_get() {
+        use super::Entry;
+        let mut map = HashMap::new(MockPolicy::new());
+        map.insert(1, 10, ());
+
+        match map.entry(1) {
+            Entry::Occupied(entry) => assert_eq!(entry.get(), &10),
+            Entry::Vacant(_) => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn test_occupied_entry_get_mut() {
+        use super::Entry;
+        let mut map = HashMap::new(MockPolicy::new());
+        map.insert(1, 10, ());
+
+        match map.entry(1) {
+            Entry::Occupied(mut entry) => {
+                let v = entry.get_mut();
+                assert_eq!(v, &10);
+                *v += 10;
+
+                let v = entry.get_mut(); // not moved
+            }
+            Entry::Vacant(_) => unreachable!(),
+        }
+
+        assert_eq!(map.get(&1).unwrap(), &20);
+    }
+
+    #[test]
+    fn test_occupied_entry_into_mut() {
+        use super::Entry;
+        let mut map = HashMap::new(MockPolicy::new());
+        map.insert(1, 10, ());
+
+        match map.entry(1) {
+            Entry::Occupied(entry) => {
+                let v = entry.into_mut();
+                assert_eq!(v, &10);
+                *v += 10;
+            }
+            Entry::Vacant(_) => unreachable!(),
+        }
+
+        assert_eq!(map.get(&1).unwrap(), &20);
+    }
+
+    #[test]
+    fn test_occupied_entry_insert() {
+        use super::Entry;
+        let mut map = HashMap::new(MockPolicy::new());
+        map.insert(1, 10, ());
+
+        assert_eq!(map.get(&1).unwrap(), &10);
+
+        match map.entry(1) {
+            Entry::Occupied(mut entry) => assert_eq!(entry.insert(20, ()), 10),
+            Entry::Vacant(_) => unreachable!(),
+        }
+
+        assert_eq!(map.get(&1).unwrap(), &20);
+    }
+
+    #[test]
+    fn test_occupied_entry_remove() {
+        use super::Entry;
+        let mut map = HashMap::new(MockPolicy::new());
+        map.insert(1, 10, ());
+
+        match map.entry(1) {
+            Entry::Occupied(entry) => assert_eq!(entry.remove(), 10),
+            Entry::Vacant(_) => unreachable!(),
+        }
+
+        assert_eq!(map.get(&1), None);
+    }
+
+    #[test]
+    fn test_occupied_entry_replace_entry() {
+        use super::Entry;
+        let mut map = HashMap::new(MockPolicy::new());
+
+        map.insert(0, Vec::<u32>::new(), ());
+
+        match map.entry(0) {
+            Entry::Occupied(entry) => {
+                let old = entry.replace_entry(Vec::with_capacity(10));
+                assert_eq!(old.0, 0);
+                assert_eq!(old.1.capacity(), 0);
+            }
+            Entry::Vacant(_) => unreachable!(),
+        }
+
+        assert_eq!(map.get(&0).unwrap().capacity(), 10);
+    }
+
+    #[test]
+    fn test_occupied_entry_replace_key() {
+        use super::Entry;
+        let mut map = HashMap::new(MockPolicy::new());
+
+        let vec = Vec::<u32>::new();
+
+        map.insert(vec.clone(), (), ());
+
+        match map.entry(Vec::with_capacity(10)) {
+            Entry::Occupied(entry) => {
+                let old = entry.replace_key();
+                assert_eq!(old.capacity(), 0);
+            }
+            Entry::Vacant(_) => unreachable!(),
+        }
+
+        match map.entry(Vec::with_capacity(3)) {
+            Entry::Occupied(entry) => assert_eq!(entry.key().capacity(), 10),
+            Entry::Vacant(_) => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn test_occupied_entry_replace_entry_with() {
+        use super::Entry;
+        let mut map = HashMap::new(MockPolicy::new());
+
+        map.insert(Vec::<u32>::new(), 10, ());
+
+        let entry = match map.entry(Vec::new()) {
+            Entry::Occupied(entry) => entry.replace_entry_with(|k, v| {
+                assert_eq!(k.capacity(), 0);
+                assert_eq!(v, 10);
+                Some(v * 10)
+            }),
+            Entry::Vacant(_) => unreachable!(),
+        };
+
+        match entry {
+            Entry::Occupied(entry) => {
+                assert_eq!(entry.key().capacity(), 0);
+                assert_eq!(entry.get(), &100)
+            }
+            Entry::Vacant(_) => unreachable!(),
+        }
+
+        let entry = match map.entry(Vec::new()) {
+            Entry::Occupied(entry) => entry.replace_entry_with(|k, v| {
+                assert_eq!(k.capacity(), 0);
+                assert_eq!(v, 100);
+                None
+            }),
+            Entry::Vacant(_) => unreachable!(),
+        };
+
+        match entry {
+            Entry::Occupied(_) => unreachable!(),
+            Entry::Vacant(_) => {
+                assert_eq!(map.get(&Vec::new()), None)
+            }
+        };
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_occupied_entry_insert_result_replace_key() {
+        let mut map = HashMap::new(MockPolicy::new());
+
+        map.entry(0).insert(0, ()).replace_key();
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_occupied_entry_insert_result_replace_entry() {
+        let mut map = HashMap::new(MockPolicy::new());
+
+        map.entry(0).insert(0, ()).replace_entry(1);
+    }
+
+    #[test]
+    fn test_vacant_entry_key() {
+        use super::Entry;
+        let mut map = HashMap::<u32, u32, _>::new(MockPolicy::new());
+
+        match map.entry(0) {
+            Entry::Occupied(_) => unreachable!(),
+            Entry::Vacant(entry) => {
+                assert_eq!(entry.key(), &0)
+            }
+        }
+    }
+
+    #[test]
+    fn test_vacant_entry_insert() {
+        use super::Entry;
+        let mut map = HashMap::new(MockPolicy::new());
+
+        assert_eq!(map.get(&0), None);
+
+        match map.entry(0) {
+            Entry::Occupied(_) => unreachable!(),
+            Entry::Vacant(entry) => {
+                let v = entry.insert(10, ());
+                *v += 20;
+            }
+        }
+
+        assert_eq!(map.get(&0).unwrap(), &30);
+    }
+
+    #[test]
+    fn test_vacant_entry_insert_entry() {
+        use super::Entry;
+        let mut map = HashMap::new(MockPolicy::new());
+
+        assert_eq!(map.get(&0), None);
+
+        let entry = match map.entry(0) {
+            Entry::Occupied(_) => unreachable!(),
+            Entry::Vacant(entry) => {
+                entry.insert_entry(33, ())
+            }
+        };
+
+        assert_eq!(entry.get(), &33);
+        assert_eq!(map.get(&0).unwrap(), &33);
     }
 }
