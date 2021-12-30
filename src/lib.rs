@@ -11,7 +11,7 @@
 //! # Examples
 //! ```no_run
 //! use endorphin::HashMap;
-//! use endorphin::LazyFixedTTLPolicy;
+//! use endorphin::policy::LazyFixedTTLPolicy;
 //!
 //! use std::time::Duration;
 //! use std::thread::sleep;
@@ -19,7 +19,7 @@
 //! let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_secs(30)));
 //! cache.insert("expired_after", "30 seconds!", ());
 //!
-//! assert_eq!(cache.get("expired_after"), Some(&"30 seconds!"))
+//! assert_eq!(cache.get("expired_after"), Some(&"30 seconds!"));
 //! sleep(Duration::from_secs(30));
 //! assert_eq!(cache.get("expired_after").is_none(), true)
 //! ```
