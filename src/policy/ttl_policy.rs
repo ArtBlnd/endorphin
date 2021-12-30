@@ -61,6 +61,7 @@ impl ExpirePolicy for TTLPolicy {
         };
 
         *last_update = now;
+        drop(last_update);
 
         // Extract all items that has been expired maximum to 16.
         let mut records = self.ttl_records.write();
