@@ -1242,15 +1242,24 @@ where
     }
 
     pub fn get(&self) -> &V {
-        unsafe { &self.elem.as_ref().1 }
+        let (_, v, s) = unsafe { self.elem.as_mut() };
+        self.table
+            .handle_status(self.table.exp_policy.on_access(s.entry_id, &mut s.storage));
+        v
     }
 
     pub fn get_mut(&mut self) -> &mut V {
-        unsafe { &mut self.elem.as_mut().1 }
+        let (_, v, s) = unsafe { self.elem.as_mut() };
+        self.table
+            .handle_status(self.table.exp_policy.on_access(s.entry_id, &mut s.storage));
+        v
     }
 
     pub fn into_mut(self) -> &'a mut V {
-        unsafe { &mut self.elem.as_mut().1 }
+        let (_, v, s) = unsafe { self.elem.as_mut() };
+        self.table
+            .handle_status(self.table.exp_policy.on_access(s.entry_id, &mut s.storage));
+        v
     }
 
     pub fn insert(&mut self, value: V, init: P::Info) -> V {
@@ -1292,6 +1301,12 @@ where
     pub fn replace_entry(self, value: V) -> (K, V) {
         let entry = unsafe { self.elem.as_mut() };
 
+        self.table.handle_status(
+            self.table
+                .exp_policy
+                .on_access(entry.2.entry_id, &mut entry.2.storage),
+        );
+
         let old_key = mem::replace(&mut entry.0, self.key.unwrap());
         let old_value = mem::replace(&mut entry.1, value);
 
@@ -1300,6 +1315,12 @@ where
 
     pub fn replace_key(self) -> K {
         let entry = unsafe { self.elem.as_mut() };
+        self.table.handle_status(
+            self.table
+                .exp_policy
+                .on_access(entry.2.entry_id, &mut entry.2.storage),
+        );
+
         mem::replace(&mut entry.0, self.key.unwrap())
     }
 
@@ -1320,6 +1341,13 @@ where
                         None
                     }
                 });
+
+            let entry = self.elem.as_mut();
+            self.table.handle_status(
+                self.table
+                    .exp_policy
+                    .on_access(entry.2.entry_id, &mut entry.2.storage),
+            );
 
             if let Some(key) = spare_key {
                 Entry::Vacant(VacantEntry {
@@ -2024,9 +2052,7 @@ mod test_map {
 
         let entry = match map.entry(0) {
             Entry::Occupied(_) => unreachable!(),
-            Entry::Vacant(entry) => {
-                entry.insert_entry(33, ())
-            }
+            Entry::Vacant(entry) => entry.insert_entry(33, ()),
         };
 
         assert_eq!(entry.get(), &33);
