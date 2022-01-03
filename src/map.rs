@@ -1266,7 +1266,13 @@ where
         let k = unsafe { &self.elem.as_ref().0 };
 
         let s = self.table.exp_policy.init_storage(init);
-        let storage = Storage::new(s, self.table.exp_bucket_table.acquire_slot());
+        let mut storage = Storage::new(s, self.table.exp_bucket_table.acquire_slot());
+
+        self.table.handle_status(
+            self.table
+                .exp_policy
+                .on_insert(storage.entry_id, &mut storage.storage),
+        );
 
         let (_, old_v, old_s) = self
             .table
@@ -1282,14 +1288,6 @@ where
 
         let _ = mem::replace(old_s, storage);
         let old_v = mem::replace(old_v, value);
-
-        let (_, _, s) = unsafe { bucket.as_mut() };
-        self.table
-            .exp_bucket_table
-            .set_bucket(s.entry_id, Some(bucket));
-
-        self.table
-            .handle_status(self.table.exp_policy.on_insert(s.entry_id, &mut s.storage));
 
         old_v
     }
