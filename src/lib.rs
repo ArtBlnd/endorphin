@@ -10,11 +10,11 @@
 //!
 //! # Examples
 //! ```no_run
-//! use endorphin::HashMap;
 //! use endorphin::policy::LazyFixedTTLPolicy;
+//! use endorphin::HashMap;
 //!
-//! use std::time::Duration;
 //! use std::thread::sleep;
+//! use std::time::Duration;
 //!
 //! let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_secs(30)));
 //! cache.insert("expired_after", "30 seconds!", ());
