@@ -66,7 +66,7 @@ impl ExpirePolicy for TTLPolicy {
         // Extract all items that has been expired maximum to 16.
         let mut records = self.ttl_records.write();
         let mut expired_values = Vec::new();
-        for _ in 0..16 {
+        for _ in 0..(records.len() >> 5 | 1) {
             let expires_at = if let Some(k) = records.keys().next() {
                 k.clone()
             } else {
