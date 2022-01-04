@@ -93,34 +93,42 @@ impl ExpirePolicy for TTIPolicy {
 
         // if target entry did not expired yet...
         let mut records = self.tti_records.write();
-        let expires_at = if let Some(v) = records.keys().next() {
-            v.clone()
-        } else {
-            return Command::Noop;
-        };
-
-        // target entry did not expired yet.
-        if expires_at > now {
-            return Command::Noop;
-        }
 
         let mut expired = Vec::new();
-        for record in records.remove(&expires_at).unwrap() {
-            if let Some((entry, storage)) = record {
-                if storage.is_expired() {
-                    expired.push(Some(entry));
-                } else {
-                    // re-insert to records.
-                    let new_slot = align_instant(*storage.timestamp.lock(), self.presision);
-                    records
-                        .entry(new_slot)
-                        .or_insert(Vec::new())
-                        .push(Some((entry, storage)));
+
+        for _ in 0..(records.len() >> 5 | 1) {
+            let expires_at = if let Some(v) = records.keys().next() {
+                v.clone()
+            } else {
+                break;
+            };
+
+            // target entry did not expired yet.
+            if expires_at > now {
+                break;
+            }
+
+            for record in records.remove(&expires_at).unwrap() {
+                if let Some((entry, storage)) = record {
+                    if storage.is_expired() {
+                        expired.push(Some(entry));
+                    } else {
+                        // re-insert to records.
+                        let new_slot = align_instant(*storage.timestamp.lock(), self.presision);
+                        records
+                            .entry(new_slot)
+                            .or_insert(Vec::new())
+                            .push(Some((entry, storage)));
+                    }
                 }
             }
         }
 
-        Command::RemoveBulk(expired)
+        if expired.is_empty() {
+            Command::Noop
+        } else {
+            Command::RemoveBulk(expired)
+        }
     }
 
     fn on_insert(&self, entry: EntryId, storage: &Self::Storage) -> Command {

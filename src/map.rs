@@ -2035,9 +2035,7 @@ mod test_map {
 
         let entry = match map.entry(0) {
             Entry::Occupied(_) => unreachable!(),
-            Entry::Vacant(entry) => {
-                entry.insert_entry(33, ())
-            }
+            Entry::Vacant(entry) => entry.insert_entry(33, ()),
         };
 
         assert_eq!(entry.get(), &33);
