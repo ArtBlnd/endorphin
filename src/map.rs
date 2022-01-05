@@ -17,6 +17,13 @@ use std::panic::{RefUnwindSafe, UnwindSafe};
 
 use crossbeam::queue::SegQueue;
 
+/// A hash map implemented with [`hashbrown`] internal.
+///
+/// `HashMap` supports both [Standard-like] and [hashbrown-like] interfaces.
+///
+/// [`hashbrown`]: https://docs.rs/hashbrown/latest/hashbrown/index.html
+/// [Standard-like]: https://doc.rust-lang.org/std/collections/struct.HashMap.html
+/// [hashbrown-like]: https://docs.rs/hashbrown/latest/hashbrown/struct.HashMap.html
 pub struct HashMap<K, V, P, H = DefaultHashBuilder>
 where
     P: ExpirePolicy,
@@ -85,7 +92,7 @@ where
 {
     /// Creates an empty `HashMap` with specified expire policy.
     ///
-    /// # Examples
+    /// # Example
     ///
     /// ```
     /// use endorphin::policy::LazyFixedTTLPolicy;
@@ -228,39 +235,47 @@ where
         let s = self.exp_policy.init_storage(init);
         let storage = Storage::new(s, self.exp_bucket_table.acquire_slot());
 
-        if let Some((_, old_v, old_s)) = self.table.get_mut(hash, equivalent_key(&k)) {
-            let bucket = self.exp_bucket_table.get(old_s.entry_id).unwrap();
+        let (bucket, old_v) =
+            if let Some((_, old_v, old_s)) = self.table.get_mut(hash, equivalent_key(&k)) {
+                let bucket = self.exp_bucket_table.get(old_s.entry_id).unwrap();
 
-            // we need to mark it as removed. but not releasing id.
-            // and assign a new id to track it.
-            self.exp_bucket_table.set_bucket(old_s.entry_id, None);
-            self.exp_bucket_table
-                .set_bucket(storage.entry_id, Some(bucket.clone()));
+                // we need to mark it as removed. but not releasing id.
+                // and assign a new id to track it.
+                self.exp_bucket_table.set_bucket(old_s.entry_id, None);
 
-            let old_s = mem::replace(old_s, storage);
-            let old_v = mem::replace(old_v, v);
-            if self.exp_policy.is_expired(old_s.entry_id, &old_s.storage)
-                || unlikely(old_s.is_removed())
-            {
-                (bucket, None)
+                let old_s = mem::replace(old_s, storage);
+                let old_v = mem::replace(old_v, v);
+                if self.exp_policy.is_expired(old_s.entry_id, &old_s.storage)
+                    || unlikely(old_s.is_removed())
+                {
+                    (bucket, None)
+                } else {
+                    (bucket, Some(old_v))
+                }
             } else {
-                (bucket, Some(old_v))
-            }
-        } else {
-            let bucket = match self.table.try_insert_no_grow(hash, (k, v, storage)) {
-                Ok(bucket) => bucket,
-                Err(v) => self.grow_and_insert(hash, v),
+                let bucket = match self.table.try_insert_no_grow(hash, (k, v, storage)) {
+                    Ok(bucket) => bucket,
+                    Err(v) => self.grow_and_insert(hash, v),
+                };
+
+                (bucket, None)
             };
 
-            (bucket, None)
-        }
+        let s = &mut bucket.as_mut().2;
+
+        self.exp_bucket_table
+            .set_bucket(s.entry_id, Some(bucket.clone()));
+
+        self.handle_status(self.exp_policy.on_insert(s.entry_id, &mut s.storage));
+
+        (bucket, old_v)
     }
 
     /// Returns a reference to the value corresponding to the key.
     ///
     /// If the entry is expired, returns `None`
     ///
-    /// # Examples
+    /// # Example
     ///
     /// ```
     /// use endorphin::policy::LazyFixedTTLPolicy;
@@ -305,7 +320,7 @@ where
     ///
     /// If the entry is expired, returns `None`
     ///
-    /// # Examples
+    /// # Example
     ///
     /// ```
     /// use endorphin::policy::LazyFixedTTLPolicy;
@@ -351,7 +366,7 @@ where
     ///
     /// If the entry is expired, returns `None`
     ///
-    /// # Examples
+    /// # Example
     ///
     /// ```
     /// use endorphin::policy::LazyFixedTTLPolicy;
@@ -398,7 +413,7 @@ where
     ///
     /// If the entry is expired, returns `false`
     ///
-    /// # Examples
+    /// # Example
     ///
     /// ```
     /// use endorphin::policy::LazyFixedTTLPolicy;
@@ -428,7 +443,7 @@ where
     ///
     /// If the `HashMap` did have this key present, the value is updated, and the old value is returned.
     ///
-    /// # Examples
+    /// # Example
     ///
     /// ```
     /// use endorphin::policy::LazyFixedTTLPolicy;
@@ -447,12 +462,8 @@ where
     /// ```
     #[inline]
     pub fn insert(&mut self, k: K, v: V, init: P::Info) -> Option<V> {
-        let (bucket, old_v) = unsafe { self.raw_insert(k, v, init) };
+        let (_, old_v) = unsafe { self.raw_insert(k, v, init) };
 
-        let (_, _, s) = unsafe { bucket.as_mut() };
-        self.exp_bucket_table.set_bucket(s.entry_id, Some(bucket));
-
-        self.handle_status(self.exp_policy.on_insert(s.entry_id, &mut s.storage));
         return old_v;
     }
 
@@ -460,7 +471,7 @@ where
     ///
     /// If the `HashMap` did not have this key present, None is returned.
     ///
-    /// # Examples
+    /// # Example
     ///
     /// ```
     /// use endorphin::policy::LazyFixedTTLPolicy;
@@ -509,7 +520,7 @@ where
     ///
     /// If the `HashMap` did not have this key present, None is returned.
     ///
-    /// # Examples
+    /// # Example
     /// ```
     /// use endorphin::policy::LazyFixedTTLPolicy;
     /// use endorphin::HashMap;
@@ -572,7 +583,7 @@ where
     ///
     /// Panics if the new allocation size overflows usize or out of memory.
     ///
-    /// # Examples
+    /// # Example
     ///
     /// ```
     /// use endorphin::policy::LazyFixedTTLPolicy;
@@ -596,7 +607,7 @@ where
     ///
     /// This function updates internal bucket id which tracks [`EntryId`] because of bucket relocation.
     ///
-    /// # Examples
+    /// # Example
     ///
     /// ```
     /// use endorphin::policy::LazyFixedTTLPolicy;
@@ -624,7 +635,7 @@ where
     ///
     /// This function updates internal bucket id which tracks [`EntryId`] because of bucket relocation.
     ///
-    /// # Examples
+    /// # Example
     ///
     /// ```
     /// use endorphin::policy::LazyFixedTTLPolicy;
@@ -651,12 +662,36 @@ where
         self.update_bucket_id();
     }
 
+    /// Gets the given key’s corresponding entry in the `HashMap` for in-place manipulation.
+    ///
+    /// # Example
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::time::Duration;
+    ///
+    /// let mut letters = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_secs(10)));
+    ///
+    /// for ch in "an easy-to-use cache library".chars() {
+    ///     let counter = letters.entry(ch).or_insert(0, ());
+    ///     *counter += 1;
+    /// }
+    ///
+    /// assert_eq!(letters.get(&'a'), Some(&4));
+    /// assert_eq!(letters.get(&'r'), Some(&2));
+    /// assert_eq!(letters.get(&'t'), Some(&1));
+    /// assert_eq!(letters.get(&'b'), Some(&1));
+    /// assert_eq!(letters.get(&'l'), Some(&1));
+    /// assert_eq!(letters.get(&'n'), Some(&1));
+    /// assert_eq!(letters.get(&'d'), None);
+    /// ```
     pub fn entry(&mut self, key: K) -> Entry<'_, K, V, P, H> {
         let hash = make_insert_hash(&self.hash_builder, &key);
 
         if let Some(elem) = self.table.find(hash, equivalent_key(&key)) {
             let s = unsafe { &elem.as_ref().2 };
-            if !self.exp_policy.is_expired(s.entry_id, &s.storage) || !s.is_removed() {
+            if !self.exp_policy.is_expired(s.entry_id, &s.storage) && !s.is_removed() {
                 return Entry::Occupied(OccupiedEntry {
                     hash,
                     key: Some(key),
@@ -672,11 +707,11 @@ where
         })
     }
 
-    /// Clears the `Hashmap`, returning all key-value pairs as an iterator. Keeps the allocated memory for reuse.
+    /// Clears the `HashMap`, returning all key-value pairs as an iterator. Keeps the allocated memory for reuse.
     ///
     /// When drop, this function also triggers internal [`ExpirePolicy::clear()`].
     ///
-    /// # Examples
+    /// # Example
     ///
     /// ```
     /// use endorphin::policy::LazyFixedTTLPolicy;
@@ -711,9 +746,9 @@ impl<K, V, P, H> HashMap<K, V, P, H>
 where
     P: ExpirePolicy,
 {
-    /// Clears the map, removing all key-value pairs. Keeps the allocated memory for reuse.
+    /// Clears the `HashMap`, removing all key-value pairs. Keeps the allocated memory for reuse.
     ///
-    /// # Examples
+    /// # Example
     ///
     /// ```
     /// use endorphin::policy::LazyFixedTTLPolicy;
@@ -738,8 +773,11 @@ where
 
     /// Returns the exact number of elements in the `HashMap`.
     ///
-    /// This functions is accurate than [`HashMap::len_approx()`] but uses slower algorithm `O(n)`.
-    /// # Examples
+    /// This functions is accurate than [`len_approx`] but uses slower algorithm `O(n)`.
+    ///
+    /// [`len_approx`]: #method.len_approx
+    ///
+    /// # Example
     ///
     /// ```
     /// use endorphin::policy::LazyFixedTTLPolicy;
@@ -760,9 +798,9 @@ where
 
     /// Returns the number of elements in the `HashMap`.
     ///
-    /// This function may contains count of elements in the `HashMap` that is not actually removed from internal table.
+    /// This function may contain count of elements in the `HashMap` that is not actually removed from internal table.
     ///
-    /// # Examples
+    /// # Example
     ///
     /// ```
     /// use endorphin::policy::LazyFixedTTLPolicy;
@@ -787,13 +825,12 @@ where
 
     ///
     ///
-    /// # Examples
+    /// # Example
     ///
     /// ```
     /// use endorphin::policy::LazyFixedTTLPolicy;
     /// use endorphin::HashMap;
     ///
-    /// use std::thread::sleep;
     /// use std::time::Duration;
     ///
     /// let mut cache = HashMap::<u32, u32, _>::with_capacity(
@@ -807,9 +844,9 @@ where
         self.table.capacity()
     }
 
-    /// Returns `true` if the map contains no elements.
+    /// Returns `true` if the `HashMap` contains no elements.
     ///
-    /// # Examples
+    /// # Example
     ///
     /// ```
     /// use endorphin::policy::LazyFixedTTLPolicy;
@@ -834,13 +871,12 @@ where
 
     /// An iterator visiting all key-value pairs in arbitrary order. The iterator element type is `(&'a K, &'a V)`.
     ///
-    /// # Examples
+    /// # Example
     ///
     /// ```
     /// use endorphin::policy::LazyFixedTTLPolicy;
     /// use endorphin::HashMap;
     ///
-    /// use std::thread::sleep;
     /// use std::time::Duration;
     ///
     /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
@@ -865,13 +901,12 @@ where
 
     /// An iterator visiting all key-value pairs in arbitrary order, with mutable references to the values. The iterator element type is `(&'a K, &'a mut V)`.
     ///
-    /// # Examples
+    /// # Example
     ///
     /// ```
     /// use endorphin::policy::LazyFixedTTLPolicy;
     /// use endorphin::HashMap;
     ///
-    /// use std::thread::sleep;
     /// use std::time::Duration;
     ///
     /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
@@ -900,13 +935,12 @@ where
 
     /// An iterator visiting all values in arbitrary order. The iterator element type is `&'a V`.
     ///
-    /// # Examples
+    /// # Example
     ///
     /// ```
     /// use endorphin::policy::LazyFixedTTLPolicy;
     /// use endorphin::HashMap;
     ///
-    /// use std::thread::sleep;
     /// use std::time::Duration;
     ///
     /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
@@ -925,13 +959,12 @@ where
 
     /// An iterator visiting all values mutably in arbitrary order. The iterator element type is `&'a mut V`.
     ///
-    /// # Examples
+    /// # Example
     ///
     /// ```
     /// use endorphin::policy::LazyFixedTTLPolicy;
     /// use endorphin::HashMap;
     ///
-    /// use std::thread::sleep;
     /// use std::time::Duration;
     ///
     /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
@@ -956,13 +989,12 @@ where
 
     /// An iterator visiting all keys in arbitrary order. The iterator element type is `&'a K`.
     ///
-    /// # Examples
+    /// # Example
     ///
     /// ```
     /// use endorphin::policy::LazyFixedTTLPolicy;
     /// use endorphin::HashMap;
     ///
-    /// use std::thread::sleep;
     /// use std::time::Duration;
     ///
     /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
@@ -980,6 +1012,11 @@ where
     }
 }
 
+/// An An iterator over the entries of a `HashMap`.
+///
+/// This `struct` is created by the [`iter`] method on [`HashMap`]. See its documentation for more.
+///
+/// [`iter`]: HashMap::iter
 #[derive(Clone)]
 pub struct Iter<'a, K, V, P>
 where
@@ -1014,6 +1051,11 @@ where
     }
 }
 
+/// A mutable iterator over the entries of a `HashMap`.
+///
+/// This `struct` is created by the [`iter_mut`] method on [`HashMap`]. See its documentation for more.
+///
+/// [`iter_mut`]: HashMap::iter_mut
 pub struct IterMut<'a, K, V, P>
 where
     P: ExpirePolicy,
@@ -1047,6 +1089,11 @@ where
     }
 }
 
+///An iterator over the keys of a `HashMap`.
+///
+/// This `struct` is created by the [`keys`] method on [`HashMap`]. See its documentation for more.
+///
+/// [`keys`]: HashMap::keys
 pub struct Keys<'a, K, V, P>
 where
     P: ExpirePolicy,
@@ -1065,6 +1112,11 @@ where
     }
 }
 
+/// An iterator over the values of a `HashMap`.
+///
+/// This `struct` is created by the [`values`] method on [`HashMap`]. See its documentation for more.
+///
+/// [`values`]: HashMap::values
 pub struct Values<'a, K, V, P>
 where
     P: ExpirePolicy,
@@ -1083,6 +1135,11 @@ where
     }
 }
 
+/// A mutable iterator over the values of a `HashMap`.
+///
+/// This `struct` is created by the [`values_mut`] method on [`HashMap`]. See its documentation for more.
+///
+/// [`values_mut`]: HashMap::values_mut
 pub struct ValuesMut<'a, K, V, P>
 where
     P: ExpirePolicy,
@@ -1101,6 +1158,11 @@ where
     }
 }
 
+/// A draining iterator over the entries of a `HashMap`.
+///
+/// This `struct` is created by the [`drain`] method on [`HashMap`]. See its documentation for more.
+///
+/// [`drain`]: HashMap::drain
 pub struct Drain<'a, K, V, P>
 where
     P: ExpirePolicy,
@@ -1137,6 +1199,11 @@ where
     }
 }
 
+/// A view into a single entry in a `HashMap`, which may either be vacant or occupied.
+///
+/// This enum is constructed from the [`entry`] method on [`HashMap`].
+///
+/// [`entry`]: HashMap::entry
 pub enum Entry<'a, K, V, P, H>
 where
     P: ExpirePolicy,
@@ -1147,10 +1214,27 @@ where
 
 impl<'a, K, V, P, H> Entry<'a, K, V, P, H>
 where
-    P: ExpirePolicy,
     K: Eq + Hash,
+    P: ExpirePolicy,
     H: BuildHasher,
 {
+    /// Sets the value of the entry, and returns an [`OccupiedEntry`].
+    ///
+    /// # Example
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    ///
+    /// let entry = cache.entry(0).insert("a", ());
+    /// assert_eq!(entry.key(), &0);
+    /// assert_eq!(entry.get(), &"a");
+    ///
+    /// assert_eq!(cache.get(&0), Some(&"a"));
+    /// ```
     pub fn insert(self, value: V, init: P::Info) -> OccupiedEntry<'a, K, V, P, H> {
         match self {
             Entry::Occupied(mut entry) => {
@@ -1161,6 +1245,30 @@ where
         }
     }
 
+    /// Ensures a value is in the entry by inserting the default if empty,
+    /// and returns a mutable reference to the value in the entry.
+    ///
+    /// # Example
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::thread::sleep;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    ///
+    /// cache.entry(0).or_insert(0, ());
+    /// assert_eq!(cache.get(&0), Some(&0));
+    ///
+    /// *cache.entry(0).or_insert(200, ()) += 10;
+    /// assert_eq!(cache.get(&0), Some(&10));
+    ///
+    /// sleep(Duration::from_millis(10));
+    ///
+    /// cache.entry(0).or_insert(100, ());
+    /// assert_eq!(cache.get(&0), Some(&100));
+    /// ```
     pub fn or_insert(self, default: V, init: P::Info) -> &'a mut V {
         match self {
             Entry::Occupied(entry) => entry.into_mut(),
@@ -1168,6 +1276,33 @@ where
         }
     }
 
+    /// Ensures a value is in the entry by inserting the result of the default function if empty,
+    /// and returns a mutable reference to the value in the entry.
+    ///
+    /// # Example
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::thread::sleep;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    ///
+    /// cache.entry("a").or_insert_with(|| "A".to_string(), ());
+    /// assert_eq!(cache.get(&"a"), Some(&"A".to_string()));
+    ///
+    /// cache
+    ///     .entry("a")
+    ///     .or_insert_with(|| "B".to_string(), ())
+    ///     .push('B');
+    /// assert_eq!(cache.get(&"a"), Some(&"AB".to_string()));
+    ///
+    /// sleep(Duration::from_millis(10));
+    ///
+    /// cache.entry("a").or_insert_with(|| "C".to_string(), ());
+    /// assert_eq!(cache.get(&"a"), Some(&"C".to_string()));
+    /// ```
     pub fn or_insert_with<F: FnOnce() -> V>(self, default: F, init: P::Info) -> &'a mut V {
         match self {
             Entry::Occupied(entry) => entry.into_mut(),
@@ -1175,6 +1310,26 @@ where
         }
     }
 
+    /// Ensures a value is in the entry by inserting, if empty, the result of the default function.
+    /// This method allows for generating key-derived values for insertion by providing the default function a reference to the key that was moved during the .entry(key) method call.
+    ///
+    /// The reference to the moved key is provided so that cloning or copying the key is unnecessary, unlike with .or_insert_with(|| ... ).
+    ///
+    /// # Example
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    ///
+    /// cache
+    ///     .entry("endorphin")
+    ///     .or_insert_with_key(|k| k.chars().count(), ());
+    ///
+    /// assert_eq!(cache.get(&"endorphin"), Some(&9));
+    /// ```
     pub fn or_insert_with_key<F: FnOnce(&K) -> V>(self, default: F, init: P::Info) -> &'a mut V {
         match self {
             Entry::Occupied(entry) => entry.into_mut(),
@@ -1185,6 +1340,20 @@ where
         }
     }
 
+    /// Returns a reference to this entry’s key.
+    ///
+    /// # Example
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::time::Duration;
+    ///
+    /// let mut cache =
+    ///     HashMap::<&str, u32, _>::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    ///
+    /// assert_eq!(cache.entry("library").key(), &"library");
+    /// ```
     pub fn key(&self) -> &K {
         match *self {
             Entry::Occupied(ref entry) => entry.key(),
@@ -1192,6 +1361,29 @@ where
         }
     }
 
+    /// Provides in-place mutable access to an occupied entry before any potential inserts into the `HashMap`.
+    ///
+    /// # Example
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    ///
+    /// cache
+    ///     .entry("endorphin")
+    ///     .and_modify(|v| unreachable!())
+    ///     .or_insert(0, ());
+    /// assert_eq!(cache.get(&"endorphin"), Some(&0));
+    ///
+    /// cache
+    ///     .entry("endorphin")
+    ///     .and_modify(|v| *v += 10)
+    ///     .or_insert(123, ());
+    /// assert_eq!(cache.get(&"endorphin"), Some(&10));
+    /// ```
     pub fn and_modify<F>(self, f: F) -> Self
     where
         F: FnOnce(&mut V),
@@ -1205,6 +1397,34 @@ where
         }
     }
 
+    /// Provides shared access to the key and owned access to the value of an occupied entry
+    /// and allows to replace or remove it based on the value of the returned option.
+    ///
+    /// # Example
+    /// ```
+    /// use endorphin::map::Entry;
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    ///
+    /// match cache
+    ///     .entry(10)
+    ///     .and_replace_entry_with(|_k, _v| unreachable!())
+    /// {
+    ///     Entry::Occupied(_) => unreachable!(),
+    ///     Entry::Vacant(entry) => assert_eq!(entry.key(), &10),
+    /// }
+    ///
+    /// cache.insert(10, 200, ());
+    ///
+    /// match cache.entry(10).and_replace_entry_with(|k, v| Some(k + v)) {
+    ///     Entry::Occupied(entry) => assert_eq!(entry.get(), &210),
+    ///     Entry::Vacant(_) => unreachable!(),
+    /// }
+    /// ```
     pub fn and_replace_entry_with<F>(self, f: F) -> Self
     where
         F: FnOnce(&K, V) -> Option<V>,
@@ -1216,6 +1436,40 @@ where
     }
 }
 
+impl<'a, K, V, P, H> Entry<'a, K, V, P, H>
+where
+    K: Eq + Hash,
+    V: Default,
+    P: ExpirePolicy,
+    H: BuildHasher,
+{
+    /// Ensures a value is in the entry by inserting the default value if empty, and returns a mutable reference to the value in the entry.
+    ///
+    /// # Example
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::<_, u32, _>::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    ///
+    /// cache.entry("endorphin").or_default(());
+    ///
+    /// assert_eq!(cache.get(&"endorphin"), Some(&u32::default()));
+    /// ```
+    pub fn or_default(self, init: P::Info) -> &'a mut V
+    where
+        V: Default,
+    {
+        match self {
+            Entry::Occupied(entry) => entry.into_mut(),
+            Entry::Vacant(entry) => entry.insert(Default::default(), init),
+        }
+    }
+}
+
+/// A view into an occupied entry in a `HashMap`. It is part of the [`Entry`] enum.
 pub struct OccupiedEntry<'a, K, V, P, H>
 where
     P: ExpirePolicy,
@@ -1232,32 +1486,176 @@ where
     K: Eq + Hash,
     H: BuildHasher,
 {
+    /// Gets a reference to the key in the entry.
+    ///
+    /// # Example
+    /// ```
+    /// use endorphin::map::Entry;
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    ///
+    /// cache.entry("occupied").or_insert("entry", ());
+    ///
+    /// if let Entry::Occupied(entry) = cache.entry("occupied") {
+    ///     assert_eq!(entry.key(), &"occupied");
+    /// }
+    /// ```
     pub fn key(&self) -> &K {
         unsafe { &self.elem.as_ref().0 }
     }
 
+    /// Take the ownership of the key and value from the `HashMap`.
+    ///
+    /// # Example
+    /// ```
+    /// use endorphin::map::Entry;
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    /// cache.entry("cache").or_insert("library", ());
+    ///
+    /// if let Entry::Occupied(entry) = cache.entry("cache") {
+    ///     assert_eq!(entry.remove_entry(), ("cache", "library"));
+    /// };
+    ///
+    /// assert_eq!(cache.contains_key("cache"), false);
+    /// ```
     pub fn remove_entry(self) -> (K, V) {
         let key = unsafe { &self.elem.as_ref().0 };
         self.table.remove_entry(key).unwrap()
     }
 
+    /// Gets a reference to the value in the entry.
+    ///
+    /// # Example
+    /// ```
+    /// use endorphin::map::Entry;
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    ///
+    /// cache.insert("cache", "library", ());
+    ///
+    /// if let Entry::Occupied(entry) = cache.entry("cache") {
+    ///     assert_eq!(entry.get(), &"library");
+    /// }
+    /// ```
     pub fn get(&self) -> &V {
-        unsafe { &self.elem.as_ref().1 }
+        let (_, v, s) = unsafe { self.elem.as_mut() };
+        self.table
+            .handle_status(self.table.exp_policy.on_access(s.entry_id, &mut s.storage));
+        v
     }
 
+    /// Gets a mutable reference to the value in the entry.
+    ///
+    /// If you need a reference to the `OccupiedEntry` which may outlive the destruction of the Entry value, see [`into_mut`].
+    ///
+    /// [`into_mut`]: #method.into_mut
+    ///
+    /// # Example
+    /// ```
+    /// use endorphin::map::Entry;
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    ///
+    /// cache.insert("a", 100, ());
+    ///
+    /// if let Entry::Occupied(mut entry) = cache.entry("a") {
+    ///     *entry.get_mut() *= 2;
+    ///     assert_eq!(*entry.get(), 200);
+    ///
+    ///     *entry.get_mut() += 22;
+    /// }
+    ///
+    /// assert_eq!(cache.get(&"a"), Some(&222));
+    /// ```
     pub fn get_mut(&mut self) -> &mut V {
-        unsafe { &mut self.elem.as_mut().1 }
+        let (_, v, s) = unsafe { self.elem.as_mut() };
+        self.table
+            .handle_status(self.table.exp_policy.on_access(s.entry_id, &mut s.storage));
+        v
     }
 
+    /// Converts the `OccupiedEntry` into a mutable reference to the value in the entry with a lifetime bound to the `HashMap` itself.
+    ///
+    /// If you need multiple references to the `OccupiedEntry`, see [`get_mut`].
+    ///
+    /// [`get_mut`]: #method.get_mut
+    ///
+    /// # Example
+    /// ```
+    /// use endorphin::map::Entry;
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    ///
+    /// cache.insert("a", 100, ());
+    ///
+    /// let v = match cache.entry("a") {
+    ///     Entry::Occupied(entry) => entry.into_mut(),
+    ///     Entry::Vacant(_) => unreachable!(),
+    /// };
+    ///
+    /// *v += 11;
+    ///
+    /// assert_eq!(cache.get(&"a"), Some(&111));
+    /// ```
     pub fn into_mut(self) -> &'a mut V {
-        unsafe { &mut self.elem.as_mut().1 }
+        let (_, v, s) = unsafe { self.elem.as_mut() };
+        self.table
+            .handle_status(self.table.exp_policy.on_access(s.entry_id, &mut s.storage));
+        v
     }
 
+    /// Sets the value of the entry, and returns the entry’s old value.
+    ///
+    /// # Example
+    /// ```
+    /// use endorphin::map::Entry;
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    ///
+    /// cache.insert("a", 100, ());
+    ///
+    /// if let Entry::Occupied(mut entry) = cache.entry("a") {
+    ///     assert_eq!(entry.insert(200, ()), 100);
+    /// }
+    ///
+    /// assert_eq!(cache.get(&"a"), Some(&200));
+    /// ```
     pub fn insert(&mut self, value: V, init: P::Info) -> V {
         let k = unsafe { &self.elem.as_ref().0 };
 
         let s = self.table.exp_policy.init_storage(init);
-        let storage = Storage::new(s, self.table.exp_bucket_table.acquire_slot());
+        let mut storage = Storage::new(s, self.table.exp_bucket_table.acquire_slot());
+
+        self.table.handle_status(
+            self.table
+                .exp_policy
+                .on_insert(storage.entry_id, &mut storage.storage),
+        );
 
         let (_, old_v, old_s) = self
             .table
@@ -1274,23 +1672,72 @@ where
         let _ = mem::replace(old_s, storage);
         let old_v = mem::replace(old_v, value);
 
-        let (_, _, s) = unsafe { bucket.as_mut() };
-        self.table
-            .exp_bucket_table
-            .set_bucket(s.entry_id, Some(bucket));
-
-        self.table
-            .handle_status(self.table.exp_policy.on_insert(s.entry_id, &mut s.storage));
-
         old_v
     }
 
+    /// Takes the value out of the entry, and returns it.
+    ///
+    /// # Example
+    /// ```
+    /// use endorphin::map::Entry;
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    ///
+    /// cache.insert("a", 100, ());
+    ///
+    /// if let Entry::Occupied(entry) = cache.entry("a") {
+    ///     assert_eq!(entry.remove(), 100);
+    /// }
+    ///
+    /// assert_eq!(cache.contains_key("a"), false);
+    /// ```
     pub fn remove(self) -> V {
         self.table.remove(unsafe { &self.elem.as_ref().0 }).unwrap()
     }
 
+    /// Replaces the entry, returning the old key and value. The new key in the hash map will be the key used to create this entry.
+    ///
+    /// # Panics
+    /// Will panic if this `OccupiedEntry` was created through [`Entry::insert`].
+    ///
+    /// # Example
+    /// ```
+    /// use endorphin::map::Entry;
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    ///
+    /// let key: Vec<u32> = Vec::new();
+    ///
+    /// cache.insert(key.clone(), 500, ());
+    ///
+    /// if let Entry::Occupied(entry) = cache.entry(Vec::with_capacity(10)) {
+    ///     let (old_k, old_v) = entry.replace_entry(200);
+    ///     assert_eq!(old_k.capacity(), 0);
+    ///     assert_eq!(old_v, 500);
+    /// }
+    ///
+    /// if let Entry::Occupied(entry) = cache.entry(key.clone()) {
+    ///     let (k, v) = entry.remove_entry();
+    ///     assert!(k.capacity() >= 10);
+    ///     assert_eq!(v, 200);
+    /// }
+    /// ```
     pub fn replace_entry(self, value: V) -> (K, V) {
         let entry = unsafe { self.elem.as_mut() };
+
+        self.table.handle_status(
+            self.table
+                .exp_policy
+                .on_access(entry.2.entry_id, &mut entry.2.storage),
+        );
 
         let old_key = mem::replace(&mut entry.0, self.key.unwrap());
         let old_value = mem::replace(&mut entry.1, value);
@@ -1298,11 +1745,91 @@ where
         (old_key, old_value)
     }
 
+    /// Replaces the key in the `HashMap` with the key used to create this entry.
+    ///
+    /// # Panics
+    /// Will panic if this `OccupiedEntry` was created through [`Entry::insert`].
+    ///
+    /// # Example
+    /// ```
+    /// use endorphin::map::Entry;
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    ///
+    /// let key: Vec<u32> = Vec::new();
+    ///
+    /// cache.insert(key.clone(), (), ());
+    ///
+    /// if let Entry::Occupied(entry) = cache.entry(Vec::with_capacity(10)) {
+    ///     let old_k = entry.replace_key();
+    ///     assert_eq!(old_k.capacity(), 0);
+    /// }
+    ///
+    /// if let Entry::Occupied(entry) = cache.entry(key.clone()) {
+    ///     let (k, _) = entry.remove_entry();
+    ///     assert!(k.capacity() >= 10);
+    /// }
+    /// ```
     pub fn replace_key(self) -> K {
         let entry = unsafe { self.elem.as_mut() };
+        self.table.handle_status(
+            self.table
+                .exp_policy
+                .on_access(entry.2.entry_id, &mut entry.2.storage),
+        );
+
         mem::replace(&mut entry.0, self.key.unwrap())
     }
 
+    /// Provides shared access to the key and owned access to the value of the entry
+    /// and allows to replace or remove it based on the value of the returned option.
+    ///
+    /// # Example
+    /// ```
+    /// use endorphin::map::Entry;
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    ///
+    /// cache.insert(11, 22, ());
+    ///
+    /// let result = match  cache.entry(11) {
+    ///     Entry::Occupied(entry) => entry.replace_entry_with(|k, v| {
+    ///         assert_eq!(k, &11);
+    ///         assert_eq!(v, 22);
+    ///         Some(k + v)
+    ///     }),
+    ///     Entry::Vacant(_) => unreachable!(),
+    /// };
+    ///
+    /// match result {
+    ///     Entry::Occupied(e) => {
+    ///         assert_eq!(e.get(), &33);
+    ///     }
+    ///     Entry::Vacant(_) => unreachable!(),
+    /// };
+    ///
+    /// assert_eq!(cache.get(&11), Some(&33));
+    ///
+    /// let result = match cache.entry(11) {
+    ///     Entry::Occupied(entry) => entry.replace_entry_with(|_k, _v| None),
+    ///     Entry::Vacant(_) => unreachable!(),
+    /// };
+    ///
+    /// match result {
+    ///     Entry::Occupied(_) => unreachable!(),
+    ///     Entry::Vacant(_) => {
+    ///         assert_eq!(cache.get(&11), None);
+    ///     }
+    /// };
+    /// ```
     pub fn replace_entry_with<F>(self, f: F) -> Entry<'a, K, V, P, H>
     where
         F: FnOnce(&K, V) -> Option<V>,
@@ -1310,9 +1837,14 @@ where
         unsafe {
             let mut spare_key = None;
 
+            let elem = self.elem.clone();
+            let s = &mut elem.clone().as_mut().2;
+
+            self.table.exp_bucket_table.set_bucket(s.entry_id, None);
+
             self.table
                 .table
-                .replace_bucket_with(self.elem.clone(), |(key, value, policy)| {
+                .replace_bucket_with(elem.clone(), |(key, value, policy)| {
                     if let Some(new_value) = f(&key, value) {
                         Some((key, new_value, policy))
                     } else {
@@ -1320,6 +1852,12 @@ where
                         None
                     }
                 });
+
+            self.table
+                .exp_bucket_table
+                .set_bucket(s.entry_id, Some(elem.clone()));
+            self.table
+                .handle_status(self.table.exp_policy.on_access(s.entry_id, &mut s.storage));
 
             if let Some(key) = spare_key {
                 Entry::Vacant(VacantEntry {
@@ -1348,45 +1886,85 @@ where
     P: ExpirePolicy,
     K: Eq,
 {
+    /// Gets a reference to the key that would be used when inserting a value through the `VacantEntry`.
+    /// 
+    /// # Example
+    /// ```
+    /// use endorphin::map::Entry;
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::<_, u32, _>::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    /// 
+    /// match cache.entry("vacant") {
+    ///     Entry::Occupied(_) => unreachable!(),
+    ///     Entry::Vacant(entry) => assert_eq!(entry.key(), &"vacant"),
+    /// }
+    /// ```
     pub fn key(&self) -> &K {
         &self.key
     }
 
+    /// Take ownership of the key.
+    /// 
+    /// # Example
+    /// ```
+    /// use endorphin::map::Entry;
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::<_, u32, _>::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    /// 
+    /// match cache.entry("vacant") {
+    ///     Entry::Occupied(_) => unreachable!(),
+    ///     Entry::Vacant(entry) => assert_eq!(entry.into_key(), "vacant"),
+    /// }
+    /// ```
     pub fn into_key(self) -> K {
         self.key
     }
 
+    /// Sets the value of the entry with the `VacantEntry`’s key, and returns a mutable reference to it.
+    /// 
+    /// # Example
+    /// ```
+    /// use endorphin::map::Entry;
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    /// 
+    /// let v = match cache.entry("hello") {
+    ///     Entry::Occupied(_) => unreachable!(),
+    ///     Entry::Vacant(entry) => entry.insert("rust".to_string(), ()),
+    /// };
+    /// 
+    /// v.push_str("acean");
+    /// 
+    /// assert_eq!(cache.get(&"hello"), Some(&"rustacean".to_string()));
+    /// ```
     pub fn insert(self, value: V, init: P::Info) -> &'a mut V
     where
         K: Hash,
         H: BuildHasher,
     {
         let bucket = unsafe { self.table.raw_insert(self.key, value, init).0 };
-        let (_, _, s) = unsafe { bucket.as_mut() };
-        self.table
-            .exp_bucket_table
-            .set_bucket(s.entry_id, Some(bucket.clone()));
-
-        self.table
-            .handle_status(self.table.exp_policy.on_insert(s.entry_id, &mut s.storage));
 
         unsafe { &mut bucket.as_mut().1 }
     }
 
-    pub fn insert_entry(self, value: V, init: P::Info) -> OccupiedEntry<'a, K, V, P, H>
+    fn insert_entry(self, value: V, init: P::Info) -> OccupiedEntry<'a, K, V, P, H>
     where
         K: Hash,
         H: BuildHasher,
     {
         let elem = unsafe { self.table.raw_insert(self.key, value, init).0 };
-
-        let (_, _, s) = unsafe { elem.as_mut() };
-        self.table
-            .exp_bucket_table
-            .set_bucket(s.entry_id, Some(elem.clone()));
-
-        self.table
-            .handle_status(self.table.exp_policy.on_insert(s.entry_id, &mut s.storage));
 
         OccupiedEntry {
             hash: self.hash,
