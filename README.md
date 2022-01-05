@@ -1,23 +1,31 @@
 # Endorphin
-> Key-Value based in-memory cache library which supports **Custom Expiration Policies** with standard HashMap, HashSet interface.
+Key-Value based in-memory cache library which supports **Custom Expiration Policies** with standard HashMap, HashSet interface.
 
-```
-use endorphin::HashMap;
-use endorphin::LazyFixedTTLPolicy;
-
-use std::time::Duration;
+## Example
+```rust
 use std::thread::sleep;
+use std::time::Duration;
 
-let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_secs(30)));
-cache.insert("expired_after", "30 seconds!", ());
+use endorphin::policy::TTLPolicy;
+use endorphin::HashMap;
 
-cache.get("expired_after").is_none(); // false
-sleep(Duration::from_secs(30));
-cache.get("expired_after").is_none(); // true
+fn main() {
+    let mut cache = HashMap::new(TTLPolicy::new());
+
+    cache.insert("Still", "Alive", Duration::from_secs(3));
+    cache.insert("Gonna", "Die", Duration::from_secs(1));
+
+    sleep(Duration::from_secs(1));
+
+    assert_eq!(cache.get(&"Still"), Some(&"Alive"));
+    assert_eq!(cache.get(&"Gonna"), None);
+}
+
 ```
 
-Currently, we provide two pre-defined policies. `LazyFixedTTLPolicy` and `TTLPolicy` we'll make more on future release
+Currently, we are providing four pre-defined policies. 
 
-
-`LazyFixedTTLPolicy` uses **Lazy Expiration** which is like other cache crates. `cached`, `ttl_cache` which expire items when you access it after expired.  
-`TTLPolicy` uses **Active Expiration** which expires even you don't access to expired entries.
+ - `LazyFixedTTLPolicy` uses **Lazy Expiration** as other cache crates do, it expires items when you access entry after its TTL.
+ - `TTLPolicy` uses **Active Expiration** which expires even you don't access to expired entries.
+ - `TTIPolicy` uses **Active Expiration** which expires even you don't access to expired entries.
+ - `MixedPolicy` is mixed policy of TTL and TTI
