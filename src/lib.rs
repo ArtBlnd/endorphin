@@ -9,19 +9,24 @@
 //! You can also define new custom policies by using [`ExpirePolicy`].
 //!
 //! # Examples
-//! ```no_run
-//! use endorphin::policy::LazyFixedTTLPolicy;
-//! use endorphin::HashMap;
-//!
+//! ```
 //! use std::thread::sleep;
 //! use std::time::Duration;
-//!
-//! let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_secs(30)));
-//! cache.insert("expired_after", "30 seconds!", ());
-//!
-//! assert_eq!(cache.get("expired_after"), Some(&"30 seconds!"));
-//! sleep(Duration::from_secs(30));
-//! assert!(cache.get("expired_after").is_none())
+//! 
+//! use endorphin::policy::TTLPolicy;
+//! use endorphin::HashMap;
+//! 
+//! fn main() {
+//!     let mut cache = HashMap::new(TTLPolicy::new());
+//! 
+//!     cache.insert("Still", "Alive", Duration::from_secs(3));
+//!     cache.insert("Gonna", "Die", Duration::from_secs(1));
+//! 
+//!     sleep(Duration::from_secs(1));
+//! 
+//!     assert_eq!(cache.get(&"Still"), Some(&"Alive"));
+//!     assert_eq!(cache.get(&"Gonna"), None);
+//!}
 //! ```
 //! For more examples, visit [here]
 //!
