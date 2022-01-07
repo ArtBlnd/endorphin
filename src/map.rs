@@ -189,7 +189,7 @@ where
 
         // seems there is no capacity left on table.
         // extend capacity and recalcalulate ids in bucket table.
-        self.reserve((self.table.capacity() + 1) * 3 / 2);
+        self.reserve(self.table.capacity() + 1);
 
         // we know we have enough size to insert.
         self.table.insert_no_grow(hash, v)
