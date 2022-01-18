@@ -220,7 +220,7 @@ where
         self.exp_backlog.push(removed);
     }
 
-    unsafe fn raw_insert(
+    pub(crate) unsafe fn raw_insert(
         &mut self,
         k: K,
         v: V,
@@ -1800,7 +1800,7 @@ where
     ///
     /// cache.insert(11, 22, ());
     ///
-    /// let result = match  cache.entry(11) {
+    /// let result = match cache.entry(11) {
     ///     Entry::Occupied(entry) => entry.replace_entry_with(|k, v| {
     ///         assert_eq!(k, &11);
     ///         assert_eq!(v, 22);
@@ -1887,7 +1887,7 @@ where
     K: Eq,
 {
     /// Gets a reference to the key that would be used when inserting a value through the `VacantEntry`.
-    /// 
+    ///
     /// # Example
     /// ```
     /// use endorphin::map::Entry;
@@ -1897,7 +1897,7 @@ where
     /// use std::time::Duration;
     ///
     /// let mut cache = HashMap::<_, u32, _>::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
-    /// 
+    ///
     /// match cache.entry("vacant") {
     ///     Entry::Occupied(_) => unreachable!(),
     ///     Entry::Vacant(entry) => assert_eq!(entry.key(), &"vacant"),
@@ -1908,7 +1908,7 @@ where
     }
 
     /// Take ownership of the key.
-    /// 
+    ///
     /// # Example
     /// ```
     /// use endorphin::map::Entry;
@@ -1918,7 +1918,7 @@ where
     /// use std::time::Duration;
     ///
     /// let mut cache = HashMap::<_, u32, _>::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
-    /// 
+    ///
     /// match cache.entry("vacant") {
     ///     Entry::Occupied(_) => unreachable!(),
     ///     Entry::Vacant(entry) => assert_eq!(entry.into_key(), "vacant"),
@@ -1929,7 +1929,7 @@ where
     }
 
     /// Sets the value of the entry with the `VacantEntry`’s key, and returns a mutable reference to it.
-    /// 
+    ///
     /// # Example
     /// ```
     /// use endorphin::map::Entry;
@@ -1939,14 +1939,14 @@ where
     /// use std::time::Duration;
     ///
     /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
-    /// 
+    ///
     /// let v = match cache.entry("hello") {
     ///     Entry::Occupied(_) => unreachable!(),
     ///     Entry::Vacant(entry) => entry.insert("rust".to_string(), ()),
     /// };
-    /// 
+    ///
     /// v.push_str("acean");
-    /// 
+    ///
     /// assert_eq!(cache.get(&"hello"), Some(&"rustacean".to_string()));
     /// ```
     pub fn insert(self, value: V, init: P::Info) -> &'a mut V
