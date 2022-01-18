@@ -61,9 +61,9 @@ mod entry;
 #[doc(inline)]
 pub use crate::map::HashMap;
 
-#[doc(inline)]
-//pub use crate::set::HashSet; <-- not implemented
 pub use crate::entry::EntryId;
+#[doc(inline)]
+pub use crate::set::HashSet;
 
 pub use crate::storage::Storage;
 

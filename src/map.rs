@@ -220,7 +220,7 @@ where
         self.exp_backlog.push(removed);
     }
 
-    unsafe fn raw_insert(
+    pub(crate) unsafe fn raw_insert(
         &mut self,
         k: K,
         v: V,
@@ -1800,7 +1800,7 @@ where
     ///
     /// cache.insert(11, 22, ());
     ///
-    /// let result = match  cache.entry(11) {
+    /// let result = match cache.entry(11) {
     ///     Entry::Occupied(entry) => entry.replace_entry_with(|k, v| {
     ///         assert_eq!(k, &11);
     ///         assert_eq!(v, 22);
