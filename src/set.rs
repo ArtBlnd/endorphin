@@ -143,10 +143,11 @@ where
     }
 
     #[inline]
-    pub fn get_or_insert_with<Q: ?Sized, F>(&mut self, value: &Q, f: F, init: P::Info) -> &T 
-    where T: Borrow<Q>,
-    Q: Hash + Eq,
-    F: FnOnce(&Q) -> T,
+    pub fn get_or_insert_with<Q: ?Sized, F>(&mut self, value: &Q, f: F, init: P::Info) -> &T
+    where
+        T: Borrow<Q>,
+        Q: Hash + Eq,
+        F: FnOnce(&Q) -> T,
     {
         match self.map.get_key_value(value) {
             Some((k, _v)) => k,
