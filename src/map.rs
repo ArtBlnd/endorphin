@@ -706,40 +706,6 @@ where
             table: self,
         })
     }
-
-    /// Clears the `HashMap`, returning all key-value pairs as an iterator. Keeps the allocated memory for reuse.
-    ///
-    /// When drop, this function also triggers internal [`ExpirePolicy::clear()`].
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use endorphin::policy::LazyFixedTTLPolicy;
-    /// use endorphin::HashMap;
-    ///
-    /// use std::thread::sleep;
-    /// use std::time::Duration;
-    ///
-    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
-    /// cache.insert(0, "a", ());
-    /// cache.insert(1, "b", ());
-    ///
-    /// for (k, v) in cache.drain() {
-    ///     assert!(k == 0 || k == 1);
-    ///     assert!(v == "a" || v == "b");
-    /// }
-    ///
-    /// assert!(cache.is_empty());
-    /// ```
-    #[inline]
-    pub fn drain(&mut self) -> Drain<'_, K, V, P> {
-        self.exp_backlog = SegQueue::new();
-
-        Drain {
-            inner: self.table.drain(),
-            policy: &mut self.exp_policy,
-        }
-    }
 }
 
 impl<K, V, P, H> HashMap<K, V, P, H>
@@ -1009,6 +975,40 @@ where
     #[inline]
     pub fn keys(&self) -> Keys<'_, K, V, P> {
         Keys { inner: self.iter() }
+    }
+
+    /// Clears the `HashMap`, returning all key-value pairs as an iterator. Keeps the allocated memory for reuse.
+    ///
+    /// When drop, this function also triggers internal [`ExpirePolicy::clear()`].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::thread::sleep;
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
+    /// cache.insert(0, "a", ());
+    /// cache.insert(1, "b", ());
+    ///
+    /// for (k, v) in cache.drain() {
+    ///     assert!(k == 0 || k == 1);
+    ///     assert!(v == "a" || v == "b");
+    /// }
+    ///
+    /// assert!(cache.is_empty());
+    /// ```
+    #[inline]
+    pub fn drain(&mut self) -> Drain<'_, K, V, P> {
+        self.exp_backlog = SegQueue::new();
+
+        Drain {
+            inner: self.table.drain(),
+            policy: &mut self.exp_policy,
+        }
     }
 }
 
@@ -1887,7 +1887,7 @@ where
     K: Eq,
 {
     /// Gets a reference to the key that would be used when inserting a value through the `VacantEntry`.
-    /// 
+    ///
     /// # Example
     /// ```
     /// use endorphin::map::Entry;
@@ -1897,7 +1897,7 @@ where
     /// use std::time::Duration;
     ///
     /// let mut cache = HashMap::<_, u32, _>::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
-    /// 
+    ///
     /// match cache.entry("vacant") {
     ///     Entry::Occupied(_) => unreachable!(),
     ///     Entry::Vacant(entry) => assert_eq!(entry.key(), &"vacant"),
@@ -1908,7 +1908,7 @@ where
     }
 
     /// Take ownership of the key.
-    /// 
+    ///
     /// # Example
     /// ```
     /// use endorphin::map::Entry;
@@ -1918,7 +1918,7 @@ where
     /// use std::time::Duration;
     ///
     /// let mut cache = HashMap::<_, u32, _>::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
-    /// 
+    ///
     /// match cache.entry("vacant") {
     ///     Entry::Occupied(_) => unreachable!(),
     ///     Entry::Vacant(entry) => assert_eq!(entry.into_key(), "vacant"),
@@ -1929,7 +1929,7 @@ where
     }
 
     /// Sets the value of the entry with the `VacantEntry`’s key, and returns a mutable reference to it.
-    /// 
+    ///
     /// # Example
     /// ```
     /// use endorphin::map::Entry;
@@ -1939,14 +1939,14 @@ where
     /// use std::time::Duration;
     ///
     /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_millis(10)));
-    /// 
+    ///
     /// let v = match cache.entry("hello") {
     ///     Entry::Occupied(_) => unreachable!(),
     ///     Entry::Vacant(entry) => entry.insert("rust".to_string(), ()),
     /// };
-    /// 
+    ///
     /// v.push_str("acean");
-    /// 
+    ///
     /// assert_eq!(cache.get(&"hello"), Some(&"rustacean".to_string()));
     /// ```
     pub fn insert(self, value: V, init: P::Info) -> &'a mut V
