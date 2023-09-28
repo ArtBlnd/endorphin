@@ -143,7 +143,7 @@ where
         }
 
         if let Some(backlog) = self.exp_backlog.pop() {
-            for entry_id in backlog.into_iter().filter_map(|v| v) {
+            for entry_id in backlog.into_iter().flatten() {
                 // bucket could already removed and its empty storage.
                 if let Some(bucket) = self.exp_bucket_table.release_slot(entry_id) {
                     unsafe {
@@ -162,7 +162,7 @@ where
     ) -> Bucket<(K, V, Storage<P::Storage>)> {
         let mut has_backlog = false;
         while let Some(backlog) = self.exp_backlog.pop() {
-            for entry_id in backlog.into_iter().filter_map(|v| v) {
+            for entry_id in backlog.into_iter().flatten() {
                 // bucket could already removed and its empty storage.
                 if let Some(bucket) = self.exp_bucket_table.release_slot(entry_id) {
                     unsafe {
@@ -208,7 +208,7 @@ where
             Command::Noop => return,
         }
 
-        removed.iter().cloned().filter_map(|v| v).for_each(|v| {
+        removed.iter().cloned().flatten().for_each(|v| {
             if let Some(bucket) = self.exp_bucket_table.get(v) {
                 let (_, _, s) = unsafe { bucket.as_ref() };
 
@@ -266,7 +266,7 @@ where
         self.exp_bucket_table
             .set_bucket(s.entry_id, Some(bucket.clone()));
 
-        self.handle_status(self.exp_policy.on_insert(s.entry_id, &mut s.storage));
+        self.handle_status(self.exp_policy.on_insert(s.entry_id, &s.storage));
 
         (bucket, old_v)
     }
@@ -298,7 +298,7 @@ where
         K: Borrow<Q>,
         Q: Hash + Eq,
     {
-        let hash = make_hash::<K, Q, H>(&self.hash_builder, &k);
+        let hash = make_hash::<K, Q, H>(&self.hash_builder, k);
         let bucket = match self.table.find(hash, equivalent_key(k)) {
             Some(bucket) => bucket,
             None => return None,
@@ -306,10 +306,10 @@ where
 
         // fire on_insert event.
         let (_, v, s) = unsafe { bucket.as_mut() };
-        self.handle_status(self.exp_policy.on_access(s.entry_id, &mut s.storage));
+        self.handle_status(self.exp_policy.on_access(s.entry_id, &s.storage));
 
         // don't give access to entry if entry expired.
-        if self.exp_policy.is_expired(s.entry_id, &mut s.storage) || unlikely(s.is_removed()) {
+        if self.exp_policy.is_expired(s.entry_id, &s.storage) || unlikely(s.is_removed()) {
             None
         } else {
             Some(v)
@@ -344,7 +344,7 @@ where
         K: Borrow<Q>,
         Q: Hash + Eq,
     {
-        let hash = make_hash::<K, Q, H>(&self.hash_builder, &k);
+        let hash = make_hash::<K, Q, H>(&self.hash_builder, k);
         let bucket = match self.table.find(hash, equivalent_key(k)) {
             Some(bucket) => bucket,
             None => return None,
@@ -352,10 +352,10 @@ where
 
         // fire on_insert event.
         let (k, v, s) = unsafe { bucket.as_mut() };
-        self.handle_status(self.exp_policy.on_access(s.entry_id, &mut s.storage));
+        self.handle_status(self.exp_policy.on_access(s.entry_id, &s.storage));
 
         // don't give access to entry if entry expired.
-        if self.exp_policy.is_expired(s.entry_id, &mut s.storage) || unlikely(s.is_removed()) {
+        if self.exp_policy.is_expired(s.entry_id, &s.storage) || unlikely(s.is_removed()) {
             None
         } else {
             Some((k, v))
@@ -391,7 +391,7 @@ where
         K: Borrow<Q>,
         Q: Hash + Eq,
     {
-        let hash = make_hash::<K, Q, H>(&self.hash_builder, &k);
+        let hash = make_hash::<K, Q, H>(&self.hash_builder, k);
         let bucket = match self.table.find(hash, equivalent_key(k)) {
             Some(bucket) => bucket,
             None => return None,
@@ -399,10 +399,10 @@ where
 
         // fire on_insert event.
         let (_, v, s) = unsafe { bucket.as_mut() };
-        self.handle_status(self.exp_policy.on_access(s.entry_id, &mut s.storage));
+        self.handle_status(self.exp_policy.on_access(s.entry_id, &s.storage));
 
         // don't give access to entry if entry expired.
-        if self.exp_policy.is_expired(s.entry_id, &mut s.storage) || unlikely(s.is_removed()) {
+        if self.exp_policy.is_expired(s.entry_id, &s.storage) || unlikely(s.is_removed()) {
             None
         } else {
             Some(v)
@@ -464,7 +464,7 @@ where
     pub fn insert(&mut self, k: K, v: V, init: P::Info) -> Option<V> {
         let (_, old_v) = unsafe { self.raw_insert(k, v, init) };
 
-        return old_v;
+        old_v
     }
 
     /// Removes a key from the `HashMap`, returning the value at the key if the key was previously in the `HashMap`.
@@ -499,7 +499,7 @@ where
         self.process_single_backlog();
 
         // Avoid `Option::map` because it bloats LLVM IR.
-        let hash = make_hash::<K, Q, H>(&self.hash_builder, &k);
+        let hash = make_hash::<K, Q, H>(&self.hash_builder, k);
         let entry = match self.table.remove_entry(hash, equivalent_key(k)) {
             Some((_, v, s)) => {
                 self.exp_bucket_table.set_bucket(s.entry_id, None);
@@ -513,7 +513,7 @@ where
             None => None,
         };
 
-        return entry;
+        entry
     }
 
     /// Removes a key from the `HashMap`, returning the stored key and value if the key was previously in the `HashMap`.
@@ -547,7 +547,7 @@ where
         self.process_single_backlog();
 
         // Avoid `Option::map` because it bloats LLVM IR.
-        let hash = make_hash::<K, Q, H>(&self.hash_builder, &k);
+        let hash = make_hash::<K, Q, H>(&self.hash_builder, k);
         let entry = match self.table.remove_entry(hash, equivalent_key(k)) {
             Some((k, v, s)) => {
                 self.exp_bucket_table.set_bucket(s.entry_id, None);
@@ -561,7 +561,7 @@ where
             None => None,
         };
 
-        return entry;
+        entry
     }
 
     #[inline]
@@ -1553,7 +1553,7 @@ where
     pub fn get(&self) -> &V {
         let (_, v, s) = unsafe { self.elem.as_mut() };
         self.table
-            .handle_status(self.table.exp_policy.on_access(s.entry_id, &mut s.storage));
+            .handle_status(self.table.exp_policy.on_access(s.entry_id, &s.storage));
         v
     }
 
@@ -1587,7 +1587,7 @@ where
     pub fn get_mut(&mut self) -> &mut V {
         let (_, v, s) = unsafe { self.elem.as_mut() };
         self.table
-            .handle_status(self.table.exp_policy.on_access(s.entry_id, &mut s.storage));
+            .handle_status(self.table.exp_policy.on_access(s.entry_id, &s.storage));
         v
     }
 
@@ -1621,7 +1621,7 @@ where
     pub fn into_mut(self) -> &'a mut V {
         let (_, v, s) = unsafe { self.elem.as_mut() };
         self.table
-            .handle_status(self.table.exp_policy.on_access(s.entry_id, &mut s.storage));
+            .handle_status(self.table.exp_policy.on_access(s.entry_id, &s.storage));
         v
     }
 
@@ -1649,12 +1649,12 @@ where
         let k = unsafe { &self.elem.as_ref().0 };
 
         let s = self.table.exp_policy.init_storage(init);
-        let mut storage = Storage::new(s, self.table.exp_bucket_table.acquire_slot());
+        let storage = Storage::new(s, self.table.exp_bucket_table.acquire_slot());
 
         self.table.handle_status(
             self.table
                 .exp_policy
-                .on_insert(storage.entry_id, &mut storage.storage),
+                .on_insert(storage.entry_id, &storage.storage),
         );
 
         let (_, old_v, old_s) = self
@@ -1736,7 +1736,7 @@ where
         self.table.handle_status(
             self.table
                 .exp_policy
-                .on_access(entry.2.entry_id, &mut entry.2.storage),
+                .on_access(entry.2.entry_id, &entry.2.storage),
         );
 
         let old_key = mem::replace(&mut entry.0, self.key.unwrap());
@@ -1779,7 +1779,7 @@ where
         self.table.handle_status(
             self.table
                 .exp_policy
-                .on_access(entry.2.entry_id, &mut entry.2.storage),
+                .on_access(entry.2.entry_id, &entry.2.storage),
         );
 
         mem::replace(&mut entry.0, self.key.unwrap())
@@ -1857,7 +1857,7 @@ where
                 .exp_bucket_table
                 .set_bucket(s.entry_id, Some(elem.clone()));
             self.table
-                .handle_status(self.table.exp_policy.on_access(s.entry_id, &mut s.storage));
+                .handle_status(self.table.exp_policy.on_access(s.entry_id, &s.storage));
 
             if let Some(key) = spare_key {
                 Entry::Vacant(VacantEntry {
@@ -2110,34 +2110,34 @@ mod test_map {
     fn test_contains_key() {
         let mut map = HashMap::new(MockPolicy::new());
 
-        assert_eq!(map.contains_key(&0), false);
-        assert_eq!(map.contains_key(&1), false);
+        assert!(!map.contains_key(&0));
+        assert!(!map.contains_key(&1));
 
         assert!(map.insert(0, 0, ()).is_none());
 
-        assert_eq!(map.contains_key(&0), true);
-        assert_eq!(map.contains_key(&1), false);
+        assert!(map.contains_key(&0));
+        assert!(!map.contains_key(&1));
 
         assert!(map.remove(&0).is_some());
 
-        assert_eq!(map.contains_key(&0), false);
+        assert!(!map.contains_key(&0));
     }
 
     #[test]
     fn test_remove() {
         let mut map = HashMap::new(MockPolicy::new());
 
-        assert_eq!(map.contains_key(&0), false);
+        assert!(!map.contains_key(&0));
 
         assert!(map.insert(0, 1, ()).is_none());
 
-        assert_eq!(map.contains_key(&0), true);
+        assert!(map.contains_key(&0));
 
         assert_eq!(map.remove(&0).unwrap(), 1);
 
-        assert_eq!(map.contains_key(&0), false);
+        assert!(!map.contains_key(&0));
 
-        assert_eq!(map.contains_key(&10), false);
+        assert!(!map.contains_key(&10));
 
         assert_eq!(map.remove(&10), None);
     }
@@ -2146,15 +2146,15 @@ mod test_map {
     fn test_remove_entry() {
         let mut map = HashMap::new(MockPolicy::new());
 
-        assert_eq!(map.contains_key(&0), false);
+        assert!(!map.contains_key(&0));
 
         assert!(map.insert(0, 1, ()).is_none());
 
-        assert_eq!(map.contains_key(&0), true);
+        assert!(map.contains_key(&0));
 
         assert_eq!(map.remove_entry(&0).unwrap(), (0, 1));
 
-        assert_eq!(map.contains_key(&0), false);
+        assert!(!map.contains_key(&0));
     }
 
     #[test]
@@ -2278,13 +2278,13 @@ mod test_map {
         map.insert(0, 0, ());
 
         match map.entry(0) {
-            Entry::Occupied(_) => assert!(true),
+            Entry::Occupied(_) => (),
             Entry::Vacant(_) => unreachable!(),
         }
 
         match map.entry(1) {
             Entry::Occupied(_) => unreachable!(),
-            Entry::Vacant(_) => assert!(true),
+            Entry::Vacant(_) => (),
         }
     }
 
@@ -2352,8 +2352,8 @@ mod test_map {
 
         let now = map
             .entry(0)
-            .and_modify(|v| *v = *v + 5)
-            .and_modify(|v| *v = *v * 10);
+            .and_modify(|v| *v += 5)
+            .and_modify(|v| *v *= 10);
         assert_eq!(now.or_insert(0, ()), &50);
         assert_eq!(map.get(&0).unwrap(), &50);
     }
@@ -2418,7 +2418,7 @@ mod test_map {
                 assert_eq!(v, &10);
                 *v += 10;
 
-                let v = entry.get_mut(); // not moved
+                let _v = entry.get_mut(); // not moved
             }
             Entry::Vacant(_) => unreachable!(),
         }
