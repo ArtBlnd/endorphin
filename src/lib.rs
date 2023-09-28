@@ -26,7 +26,7 @@
 //!
 //!     assert_eq!(cache.get(&"Still"), Some(&"Alive"));
 //!     assert_eq!(cache.get(&"Gonna"), None);
-//!}
+//! }
 //! ```
 //! For more examples, visit [here]
 //!
