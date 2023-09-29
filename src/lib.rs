@@ -12,21 +12,21 @@
 //! ```
 //! use std::thread::sleep;
 //! use std::time::Duration;
-//! 
+//!
 //! use endorphin::policy::TTLPolicy;
 //! use endorphin::HashMap;
-//! 
+//!
 //! fn main() {
 //!     let mut cache = HashMap::new(TTLPolicy::new());
-//! 
+//!
 //!     cache.insert("Still", "Alive", Duration::from_secs(3));
 //!     cache.insert("Gonna", "Die", Duration::from_secs(1));
-//! 
+//!
 //!     sleep(Duration::from_secs(1));
-//! 
+//!
 //!     assert_eq!(cache.get(&"Still"), Some(&"Alive"));
 //!     assert_eq!(cache.get(&"Gonna"), None);
-//!}
+//! }
 //! ```
 //! For more examples, visit [here]
 //!

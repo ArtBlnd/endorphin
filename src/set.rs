@@ -116,14 +116,7 @@ where
 
     #[inline]
     pub fn get_or_insert(&mut self, value: T, init: P::Info) -> &T {
-        match self.map.get_key_value(&value) {
-            Some((k, _v)) => k,
-            None => {
-                let (bucket, _) = unsafe { self.map.raw_insert(value, (), init) };
-
-                unsafe { &bucket.as_ref().0 }
-            }
-        }
+        todo!()
     }
 
     #[inline]
@@ -132,14 +125,7 @@ where
         T: Borrow<Q>,
         Q: Hash + Eq + ToOwned<Owned = T>,
     {
-        match self.map.get_key_value(value) {
-            Some((k, _v)) => k,
-            None => {
-                let (bucket, _) = unsafe { self.map.raw_insert(value.to_owned(), (), init) };
-
-                unsafe { &bucket.as_ref().0 }
-            }
-        }
+        todo!()
     }
 
     #[inline]
@@ -149,14 +135,7 @@ where
         Q: Hash + Eq,
         F: FnOnce(&Q) -> T,
     {
-        match self.map.get_key_value(value) {
-            Some((k, _v)) => k,
-            None => {
-                let (bucket, _) = unsafe { self.map.raw_insert(f(value), (), init) };
-
-                unsafe { &bucket.as_ref().0 }
-            }
-        }
+        todo!()
     }
 
     pub fn is_disjoint(&self, other: &Self) -> bool {
@@ -199,10 +178,7 @@ where
         T: Borrow<Q>,
         Q: Hash + Eq,
     {
-        match self.map.remove_entry(value) {
-            Some((k, _)) => Some(k),
-            None => None,
-        }
+        self.map.remove_entry(value).map(|(k, _)| k)
     }
 }
 
@@ -276,10 +252,7 @@ where
     type Item = T;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self.iter.next() {
-            Some((k, _)) => Some(k),
-            None => None,
-        }
+        self.iter.next().map(|(k, _)| k)
     }
 }
 

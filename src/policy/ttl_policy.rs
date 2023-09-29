@@ -30,6 +30,12 @@ impl TTLPolicy {
     }
 }
 
+impl Default for TTLPolicy {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ExpirePolicy for TTLPolicy {
     type Info = Duration;
     type Storage = Instant;
@@ -68,7 +74,7 @@ impl ExpirePolicy for TTLPolicy {
         let mut expired_values = Vec::new();
         for _ in 0..(records.len() >> 5 | 1) {
             let expires_at = if let Some(k) = records.keys().next() {
-                k.clone()
+                *k
             } else {
                 break;
             };
@@ -109,7 +115,7 @@ impl ExpirePolicy for TTLPolicy {
 #[inline]
 fn align_instant(instant: Instant, by: Duration) -> Instant {
     use once_cell::sync::Lazy;
-    static BASE: Lazy<Instant> = Lazy::new(|| Instant::now());
+    static BASE: Lazy<Instant> = Lazy::new(Instant::now);
 
     let v = *BASE;
     if likely(v < instant) {

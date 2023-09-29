@@ -32,7 +32,7 @@ impl TTIStorage {
             return false;
         }
 
-        return true;
+        true
     }
 }
 
@@ -56,6 +56,12 @@ impl TTIPolicy {
             tti_last_update: RwLock::new(Instant::now()),
             presision,
         }
+    }
+}
+
+impl Default for TTIPolicy {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -98,7 +104,7 @@ impl ExpirePolicy for TTIPolicy {
 
         for _ in 0..(records.len() >> 5 | 1) {
             let expires_at = if let Some(v) = records.keys().next() {
-                v.clone()
+                *v
             } else {
                 break;
             };
@@ -152,7 +158,7 @@ impl ExpirePolicy for TTIPolicy {
 #[inline]
 fn align_instant(instant: Instant, by: Duration) -> Instant {
     use once_cell::sync::Lazy;
-    static BASE: Lazy<Instant> = Lazy::new(|| Instant::now());
+    static BASE: Lazy<Instant> = Lazy::new(Instant::now);
 
     let v = *BASE;
     if likely(v < instant) {

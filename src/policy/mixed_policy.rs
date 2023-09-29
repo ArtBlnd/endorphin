@@ -34,6 +34,12 @@ impl MixedPolicy {
     }
 }
 
+impl Default for MixedPolicy {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ExpirePolicy for MixedPolicy {
     type Info = Expiration;
     type Storage = Storage;
