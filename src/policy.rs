@@ -14,7 +14,7 @@ pub enum Command {
     Remove(EntryId),
     // Some entry has been expired.
     RemoveBulk(Vec<Option<EntryId>>),
-    // Everything is good. Seems all entry is alive!
+    // Everything is good. Seems all entries are alive!
     Noop,
 }
 

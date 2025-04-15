@@ -4,7 +4,7 @@
 //! - [`LazyFixedTTLPolicy`] : A Lazy TTL Policy that checks TTL when accessing values.
 //! - [`MixedPolicy`] : TTL & TTI mixed policy.
 //! - [`TTIPolicy`] : Time To Idle Policy.
-//! - [`TTLPolicy`] : Time To Live policy .
+//! - [`TTLPolicy`] : Time To Live policy.
 //!
 //! You can also define new custom policies by using [`ExpirePolicy`].
 //!
@@ -40,7 +40,7 @@
 
 // for internal use.
 pub(crate) mod hash;
-pub(crate) mod instrinsic;
+pub(crate) mod intrinsic;
 pub(crate) mod storage;
 
 // for external use.

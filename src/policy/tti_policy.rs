@@ -1,4 +1,4 @@
-use crate::instrinsic::*;
+use crate::intrinsic::*;
 use crate::policy::{Command, ExpirePolicy};
 use crate::EntryId;
 
@@ -39,22 +39,22 @@ impl TTIStorage {
 pub struct TTIPolicy {
     tti_records: RwLock<BTreeMap<Instant, Vec<Option<(EntryId, TTIStorage)>>>>,
     tti_last_update: RwLock<Instant>,
-    presision: Duration,
+    precision: Duration,
 }
 
 impl TTIPolicy {
     #[must_use]
     pub fn new() -> Self {
-        // default presision is 1 seconds
-        Self::with_presision(Duration::from_millis(100))
+        // default precision is 1 seconds
+        Self::with_precision(Duration::from_millis(100))
     }
 
     #[must_use]
-    pub fn with_presision(presision: Duration) -> Self {
+    pub fn with_precision(precision: Duration) -> Self {
         Self {
             tti_records: RwLock::new(BTreeMap::new()),
             tti_last_update: RwLock::new(Instant::now()),
-            presision,
+            precision,
         }
     }
 }
@@ -86,7 +86,7 @@ impl ExpirePolicy for TTIPolicy {
         let now = Instant::now();
         let last_update = self.tti_last_update.upgradable_read();
 
-        if likely(*last_update + self.presision > now) {
+        if likely(*last_update + self.precision > now) {
             return Command::Noop;
         }
 
@@ -97,7 +97,7 @@ impl ExpirePolicy for TTIPolicy {
 
         *last_update = now;
 
-        // if target entry did not expired yet...
+        // if target entry has not expired yet...
         let mut records = self.tti_records.write();
 
         let mut expired = Vec::new();
@@ -109,7 +109,7 @@ impl ExpirePolicy for TTIPolicy {
                 break;
             };
 
-            // target entry did not expired yet.
+            // target entry has not expired yet.
             if expires_at > now {
                 break;
             }
@@ -120,7 +120,7 @@ impl ExpirePolicy for TTIPolicy {
                         expired.push(Some(entry));
                     } else {
                         // re-insert to records.
-                        let new_slot = align_instant(*storage.timestamp.lock(), self.presision);
+                        let new_slot = align_instant(*storage.timestamp.lock(), self.precision);
                         records
                             .entry(new_slot)
                             .or_insert(Vec::new())
@@ -138,7 +138,7 @@ impl ExpirePolicy for TTIPolicy {
     }
 
     fn on_insert(&self, entry: EntryId, storage: &Self::Storage) -> Command {
-        let slot = align_instant(*storage.timestamp.lock(), self.presision);
+        let slot = align_instant(*storage.timestamp.lock(), self.precision);
         {
             let mut ttl_records = self.tti_records.write();
             ttl_records

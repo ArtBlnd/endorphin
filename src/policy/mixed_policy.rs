@@ -21,15 +21,15 @@ pub struct MixedPolicy {
 impl MixedPolicy {
     #[must_use]
     pub fn new() -> Self {
-        // default presision is 1 seconds
-        Self::with_presision(Duration::from_millis(100))
+        // default precision is 1 seconds
+        Self::with_precision(Duration::from_millis(100))
     }
 
     #[must_use]
-    pub fn with_presision(presision: Duration) -> Self {
+    pub fn with_precision(precision: Duration) -> Self {
         Self {
-            ttl: TTLPolicy::with_presision(presision),
-            tti: TTIPolicy::with_presision(presision),
+            ttl: TTLPolicy::with_precision(precision),
+            tti: TTIPolicy::with_precision(precision),
         }
     }
 }

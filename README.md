@@ -26,6 +26,6 @@ fn main() {
 Currently, we are providing four pre-defined policies. 
 
  - `LazyFixedTTLPolicy` uses **Lazy Expiration** as other cache crates do, it expires items when you access entry after its TTL.
- - `TTLPolicy` uses **Active Expiration** which expires even you don't access to expired entries.
- - `TTIPolicy` uses **Active Expiration** which expires even you don't access to expired entries.
+ - `TTLPolicy` uses **Active Expiration** which expires even if you don't access expired entries.
+ - `TTIPolicy` uses **Active Expiration** which expires even if you don't access expired entries.
  - `MixedPolicy` is mixed policy of TTL and TTI

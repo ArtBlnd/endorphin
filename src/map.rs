@@ -1,5 +1,5 @@
 use crate::hash::*;
-use crate::instrinsic::unlikely;
+use crate::intrinsic::unlikely;
 use crate::policy::{Command, ExpirePolicy};
 use crate::storage::Storage;
 use crate::{EntryId, EntryIdTable};
@@ -739,7 +739,7 @@ where
 
     /// Returns the exact number of elements in the `HashMap`.
     ///
-    /// This functions is accurate than [`len_approx`] but uses slower algorithm `O(n)`.
+    /// This function is more accurate than [`len_approx`] but uses a slower algorithm `O(n)`.
     ///
     /// [`len_approx`]: #method.len_approx
     ///
@@ -1012,7 +1012,7 @@ where
     }
 }
 
-/// An An iterator over the entries of a `HashMap`.
+/// An iterator over the entries of a `HashMap`.
 ///
 /// This `struct` is created by the [`iter`] method on [`HashMap`]. See its documentation for more.
 ///

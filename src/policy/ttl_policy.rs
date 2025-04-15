@@ -1,4 +1,4 @@
-use crate::instrinsic::*;
+use crate::intrinsic::*;
 use crate::policy::{Command, ExpirePolicy};
 use crate::EntryId;
 
@@ -10,22 +10,22 @@ use parking_lot::{RwLock, RwLockUpgradableReadGuard};
 pub struct TTLPolicy {
     ttl_records: RwLock<BTreeMap<Instant, Vec<Option<EntryId>>>>,
     ttl_last_update: RwLock<Instant>,
-    presision: Duration,
+    precision: Duration,
 }
 
 impl TTLPolicy {
     #[must_use]
     pub fn new() -> Self {
-        // default presision is 1 seconds
-        Self::with_presision(Duration::from_millis(100))
+        // default precision is 1 seconds
+        Self::with_precision(Duration::from_millis(100))
     }
 
     #[must_use]
-    pub fn with_presision(presision: Duration) -> Self {
+    pub fn with_precision(precision: Duration) -> Self {
         Self {
             ttl_records: RwLock::new(BTreeMap::new()),
             ttl_last_update: RwLock::new(Instant::now()),
-            presision,
+            precision,
         }
     }
 }
@@ -57,7 +57,7 @@ impl ExpirePolicy for TTLPolicy {
         let now = Instant::now();
         let last_update = self.ttl_last_update.upgradable_read();
 
-        if likely(*last_update + self.presision > now) {
+        if likely(*last_update + self.precision > now) {
             return Command::Noop;
         }
 
@@ -69,7 +69,7 @@ impl ExpirePolicy for TTLPolicy {
         *last_update = now;
         drop(last_update);
 
-        // Extract all items that has been expired maximum to 16.
+        // Extract all items that have been expired, up to a maximum of 16.
         let mut records = self.ttl_records.write();
         let mut expired_values = Vec::new();
         for _ in 0..(records.len() >> 5 | 1) {
@@ -95,7 +95,7 @@ impl ExpirePolicy for TTLPolicy {
     }
 
     fn on_insert(&self, entry: EntryId, expire_at: &Self::Storage) -> Command {
-        let slot = align_instant(*expire_at, self.presision);
+        let slot = align_instant(*expire_at, self.precision);
         {
             let mut ttl_records = self.ttl_records.write();
             ttl_records
