@@ -34,7 +34,7 @@ use std::{
 /// assert!(cache.contains(&"Still"));
 /// assert!(!cache.contains(&"Gonna"));
 /// ```
-pub struct HashSet<T, P, H>
+pub struct HashSet<T, P, H = DefaultHashBuilder>
 where
     P: ExpirePolicy,
 {
