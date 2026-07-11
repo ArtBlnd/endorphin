@@ -4,8 +4,9 @@ use hashbrown::hash_map::DefaultHashBuilder;
 
 use std::{
     borrow::Borrow,
+    fmt,
     hash::{BuildHasher, Hash},
-    iter::Chain,
+    iter::{Chain, FromIterator},
 };
 
 /// A hash set with an expiration policy, built on top of [`HashMap`] with `()` values.
@@ -1008,6 +1009,213 @@ where
     }
 }
 
+impl<T, P, H> fmt::Debug for HashSet<T, P, H>
+where
+    T: fmt::Debug,
+    P: ExpirePolicy,
+{
+    /// Formats the live elements. Expired ones are not shown, and none of them are marked as
+    /// accessed.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_set().entries(self.iter()).finish()
+    }
+}
+
+impl<T, P> Default for HashSet<T, P, DefaultHashBuilder>
+where
+    P: ExpirePolicy + Default,
+{
+    /// Creates an empty `HashSet` driven by the policy's own default.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use endorphin::policy::TTLPolicy;
+    /// use endorphin::HashSet;
+    ///
+    /// let cache: HashSet<u32, TTLPolicy, _> = HashSet::default();
+    ///
+    /// assert!(cache.is_empty());
+    /// ```
+    fn default() -> Self {
+        Self::new(P::default())
+    }
+}
+
+impl<T, P, H> PartialEq for HashSet<T, P, H>
+where
+    T: Eq + Hash,
+    P: ExpirePolicy,
+    H: BuildHasher,
+{
+    /// Two sets are equal when they hold the same live elements. Expired ones are ignored, and
+    /// the comparison does not count as an access.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashSet;
+    ///
+    /// use std::thread::sleep;
+    /// use std::time::Duration;
+    ///
+    /// let policy = || LazyFixedTTLPolicy::new(Duration::from_millis(10));
+    ///
+    /// let mut a = HashSet::new(policy());
+    /// let mut b = HashSet::new(policy());
+    ///
+    /// a.insert(0, ());
+    /// assert_ne!(a, b);
+    ///
+    /// b.insert(0, ());
+    /// assert_eq!(a, b);
+    ///
+    /// sleep(Duration::from_millis(15));
+    /// assert_eq!(a, b);
+    /// assert!(a.is_empty());
+    /// ```
+    fn eq(&self, other: &Self) -> bool {
+        self.map == other.map
+    }
+}
+
+impl<T, P, H> Eq for HashSet<T, P, H>
+where
+    T: Eq + Hash,
+    P: ExpirePolicy,
+    H: BuildHasher,
+{
+}
+
+impl<T, P, H> Extend<(T, P::Info)> for HashSet<T, P, H>
+where
+    T: Eq + Hash,
+    P: ExpirePolicy,
+    H: BuildHasher,
+{
+    /// Inserts every `(value, init)` the iterator yields.
+    ///
+    /// The expiration info travels with each element: there is no single policy input that
+    /// could stand in for all of them.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use endorphin::policy::TTLPolicy;
+    /// use endorphin::HashSet;
+    ///
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashSet::new(TTLPolicy::new());
+    ///
+    /// cache.extend([(0, Duration::from_secs(30)), (1, Duration::from_secs(60))]);
+    ///
+    /// assert_eq!(cache.len(), 2);
+    /// ```
+    fn extend<I: IntoIterator<Item = (T, P::Info)>>(&mut self, iter: I) {
+        self.map
+            .extend(iter.into_iter().map(|(value, init)| (value, (), init)))
+    }
+}
+
+impl<T, P> FromIterator<(T, P::Info)> for HashSet<T, P, DefaultHashBuilder>
+where
+    T: Eq + Hash,
+    P: ExpirePolicy + Default,
+{
+    /// Collects `(value, init)` pairs into a `HashSet` driven by the policy's default.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use endorphin::policy::TTLPolicy;
+    /// use endorphin::HashSet;
+    ///
+    /// use std::time::Duration;
+    ///
+    /// let cache: HashSet<u32, TTLPolicy, _> =
+    ///     vec![(0, Duration::from_secs(30)), (1, Duration::from_secs(60))]
+    ///         .into_iter()
+    ///         .collect();
+    ///
+    /// assert!(cache.contains(&0));
+    /// ```
+    fn from_iter<I: IntoIterator<Item = (T, P::Info)>>(iter: I) -> Self {
+        let mut set = Self::default();
+        set.extend(iter);
+        set
+    }
+}
+
+impl<'a, T, P, H> IntoIterator for &'a HashSet<T, P, H>
+where
+    P: ExpirePolicy,
+{
+    type Item = &'a T;
+    type IntoIter = Iter<'a, T, P>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<T, P, H> IntoIterator for HashSet<T, P, H>
+where
+    P: ExpirePolicy,
+{
+    type Item = T;
+    type IntoIter = IntoIter<T, P>;
+
+    /// Consumes the set and yields every live element. Expired ones are dropped, not yielded.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashSet;
+    ///
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashSet::new(LazyFixedTTLPolicy::new(Duration::from_secs(30)));
+    /// cache.insert(0, ());
+    /// cache.insert(1, ());
+    ///
+    /// let mut values: Vec<_> = cache.into_iter().collect();
+    /// values.sort_unstable();
+    ///
+    /// assert_eq!(values, [0, 1]);
+    /// ```
+    fn into_iter(self) -> Self::IntoIter {
+        IntoIter {
+            iter: self.map.into_iter(),
+        }
+    }
+}
+
+/// An owning iterator over the live elements of a [`HashSet`].
+///
+/// This `struct` is created by the [`into_iter`] method on [`HashSet`], through [`IntoIterator`].
+///
+/// [`into_iter`]: IntoIterator::into_iter
+pub struct IntoIter<T, P>
+where
+    P: ExpirePolicy,
+{
+    iter: map::IntoIter<T, (), P>,
+}
+
+impl<T, P> Iterator for IntoIter<T, P>
+where
+    P: ExpirePolicy,
+{
+    type Item = T;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next().map(|(value, _)| value)
+    }
+}
+
 #[cfg(test)]
 mod test_set {
     use super::HashSet;
@@ -1138,6 +1346,79 @@ mod test_set {
         assert_eq!(set.get_or_insert_owned("cat", ()), "cat");
         assert_eq!(set.get_or_insert_owned("fish", ()), "fish");
         assert_eq!(set.len(), 2);
+    }
+
+    /// Comparing two caches must not count as using them -- see the same test on `HashMap`.
+    #[test]
+    fn test_eq_does_not_fire_access_events() {
+        let spy = SpyPolicy::default();
+        let mut a = HashSet::new(spy.clone());
+        let mut b = HashSet::new(SpyPolicy::default());
+
+        a.insert(0, ());
+        b.insert(0, ());
+        spy.accesses.set(0);
+
+        assert_eq!(a, b);
+        assert_eq!(spy.accesses.get(), 0);
+
+        // a plain read still does report itself.
+        assert!(a.contains(&0));
+        assert_eq!(spy.accesses.get(), 1);
+    }
+
+    #[test]
+    fn test_eq_ignores_expired_elements() {
+        let spy = SpyPolicy::default();
+        let mut a = HashSet::new(spy.clone());
+        let b = HashSet::new(SpyPolicy::default());
+
+        a.insert(0, ());
+        assert_ne!(a, b);
+
+        spy.expired.set(true);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn test_into_iter_skips_expired_elements() {
+        let spy = SpyPolicy::default();
+        let mut set = HashSet::new(spy.clone());
+
+        set.insert(0, ());
+        set.insert(1, ());
+
+        let mut values: Vec<_> = (&set).into_iter().copied().collect();
+        values.sort_unstable();
+        assert_eq!(values, [0, 1]);
+
+        spy.expired.set(true);
+        assert_eq!(set.into_iter().count(), 0);
+    }
+
+    #[test]
+    fn test_extend_and_from_iter() {
+        let mut set = HashSet::new(SpyPolicy::default());
+        set.extend(vec![(0, ()), (1, ())]);
+
+        assert_eq!(set.len(), 2);
+        assert!(set.contains(&1));
+
+        let collected: HashSet<u32, SpyPolicy, _> = vec![(0, ()), (1, ())].into_iter().collect();
+
+        assert_eq!(collected.len(), 2);
+    }
+
+    #[test]
+    fn test_debug_shows_live_elements_only() {
+        let spy = SpyPolicy::default();
+        let mut set = HashSet::new(spy.clone());
+        set.insert(0, ());
+
+        assert_eq!(format!("{:?}", set), "{0}");
+
+        spy.expired.set(true);
+        assert_eq!(format!("{:?}", set), "{}");
     }
 
     /// End-to-end check against a real clock. Ignored under Miri, which runs far too slowly

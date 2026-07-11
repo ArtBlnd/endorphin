@@ -6,11 +6,12 @@ use crate::{EntryId, EntryIdTable};
 
 // hashbrown internals.
 use hashbrown::hash_map::DefaultHashBuilder;
-use hashbrown::raw::{Bucket, RawDrain, RawIter, RawTable};
+use hashbrown::raw::{Bucket, RawDrain, RawIntoIter, RawIter, RawTable};
 
 use std::borrow::Borrow;
+use std::fmt;
 use std::hash::{BuildHasher, Hash};
-use std::iter::Iterator;
+use std::iter::{FromIterator, Iterator};
 use std::marker::PhantomData;
 use std::mem;
 use std::panic::{RefUnwindSafe, UnwindSafe};
@@ -2061,6 +2062,282 @@ where
     }
 }
 
+impl<K, V, P, H> HashMap<K, V, P, H>
+where
+    P: ExpirePolicy,
+    K: Hash + Eq,
+    H: BuildHasher,
+{
+    /// Looks up a live entry without reporting it to the policy.
+    ///
+    /// [`get`] reports the lookup through `on_access`, which is what reading a cache should do.
+    /// Inspecting one is not reading it, so `Debug` and `PartialEq` come through here instead --
+    /// the same way iteration does. Otherwise comparing two caches under a policy like
+    /// [`TTIPolicy`] would count as touching every entry in both.
+    ///
+    /// [`get`]: HashMap::get
+    /// [`TTIPolicy`]: crate::policy::TTIPolicy
+    fn peek<Q: ?Sized>(&self, k: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq,
+    {
+        let hash = make_hash::<K, Q, H>(&self.hash_builder, k);
+        let bucket = self.table.find(hash, equivalent_key(k))?;
+
+        let (_, v, s) = unsafe { bucket.as_ref() };
+        if self.exp_policy.is_expired(s.entry_id, &s.storage) || unlikely(s.is_removed()) {
+            None
+        } else {
+            Some(v)
+        }
+    }
+}
+
+impl<K, V, P, H> fmt::Debug for HashMap<K, V, P, H>
+where
+    K: fmt::Debug,
+    V: fmt::Debug,
+    P: ExpirePolicy,
+{
+    /// Formats the live entries. Expired ones are not shown, and none of them are marked as
+    /// accessed.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_map().entries(self.iter()).finish()
+    }
+}
+
+impl<K, V, P> Default for HashMap<K, V, P, DefaultHashBuilder>
+where
+    P: ExpirePolicy + Default,
+{
+    /// Creates an empty `HashMap` driven by the policy's own default.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use endorphin::policy::TTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// let cache: HashMap<u32, u32, TTLPolicy> = HashMap::default();
+    ///
+    /// assert!(cache.is_empty());
+    /// ```
+    fn default() -> Self {
+        Self::new(P::default())
+    }
+}
+
+impl<K, V, P, H> PartialEq for HashMap<K, V, P, H>
+where
+    K: Eq + Hash,
+    V: PartialEq,
+    P: ExpirePolicy,
+    H: BuildHasher,
+{
+    /// Two maps are equal when they hold the same live entries. Expired ones are ignored, and
+    /// the comparison does not count as an access.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::thread::sleep;
+    /// use std::time::Duration;
+    ///
+    /// let policy = || LazyFixedTTLPolicy::new(Duration::from_millis(10));
+    ///
+    /// let mut a = HashMap::new(policy());
+    /// let mut b = HashMap::new(policy());
+    ///
+    /// a.insert(0, "a", ());
+    /// assert_ne!(a, b);
+    ///
+    /// b.insert(0, "a", ());
+    /// assert_eq!(a, b);
+    ///
+    /// // both sides expire, and an empty map equals an empty map.
+    /// sleep(Duration::from_millis(15));
+    /// assert_eq!(a, b);
+    /// assert!(a.is_empty());
+    /// ```
+    fn eq(&self, other: &Self) -> bool {
+        if self.len() != other.len() {
+            return false;
+        }
+
+        self.iter().all(|(k, v)| other.peek(k) == Some(v))
+    }
+}
+
+impl<K, V, P, H> Eq for HashMap<K, V, P, H>
+where
+    K: Eq + Hash,
+    V: Eq,
+    P: ExpirePolicy,
+    H: BuildHasher,
+{
+}
+
+impl<K, V, P, H> Extend<(K, V, P::Info)> for HashMap<K, V, P, H>
+where
+    K: Eq + Hash,
+    P: ExpirePolicy,
+    H: BuildHasher,
+{
+    /// Inserts every `(key, value, init)` the iterator yields.
+    ///
+    /// The expiration info travels with each element: there is no single policy input that
+    /// could stand in for all of them.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use endorphin::policy::TTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(TTLPolicy::new());
+    ///
+    /// cache.extend([
+    ///     (0, "a", Duration::from_secs(30)),
+    ///     (1, "b", Duration::from_secs(60)),
+    /// ]);
+    ///
+    /// assert_eq!(cache.len(), 2);
+    /// ```
+    fn extend<I: IntoIterator<Item = (K, V, P::Info)>>(&mut self, iter: I) {
+        let iter = iter.into_iter();
+        self.reserve(iter.size_hint().0);
+
+        for (k, v, init) in iter {
+            self.insert(k, v, init);
+        }
+    }
+}
+
+impl<K, V, P> FromIterator<(K, V, P::Info)> for HashMap<K, V, P, DefaultHashBuilder>
+where
+    K: Eq + Hash,
+    P: ExpirePolicy + Default,
+{
+    /// Collects `(key, value, init)` triples into a `HashMap` driven by the policy's default.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use endorphin::policy::TTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::time::Duration;
+    ///
+    /// let cache: HashMap<u32, &str, TTLPolicy> = vec![
+    ///     (0, "a", Duration::from_secs(30)),
+    ///     (1, "b", Duration::from_secs(60)),
+    /// ]
+    /// .into_iter()
+    /// .collect();
+    ///
+    /// assert_eq!(cache.get(&0), Some(&"a"));
+    /// ```
+    fn from_iter<I: IntoIterator<Item = (K, V, P::Info)>>(iter: I) -> Self {
+        let mut map = Self::default();
+        map.extend(iter);
+        map
+    }
+}
+
+impl<'a, K, V, P, H> IntoIterator for &'a HashMap<K, V, P, H>
+where
+    P: ExpirePolicy,
+{
+    type Item = (&'a K, &'a V);
+    type IntoIter = Iter<'a, K, V, P>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'a, K, V, P, H> IntoIterator for &'a mut HashMap<K, V, P, H>
+where
+    P: ExpirePolicy,
+{
+    type Item = (&'a mut K, &'a mut V);
+    type IntoIter = IterMut<'a, K, V, P>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
+    }
+}
+
+impl<K, V, P, H> IntoIterator for HashMap<K, V, P, H>
+where
+    P: ExpirePolicy,
+{
+    type Item = (K, V);
+    type IntoIter = IntoIter<K, V, P>;
+
+    /// Consumes the map and yields every live entry. Expired ones are dropped, not yielded.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use endorphin::policy::LazyFixedTTLPolicy;
+    /// use endorphin::HashMap;
+    ///
+    /// use std::time::Duration;
+    ///
+    /// let mut cache = HashMap::new(LazyFixedTTLPolicy::new(Duration::from_secs(30)));
+    /// cache.insert(0, "a", ());
+    /// cache.insert(1, "b", ());
+    ///
+    /// let mut entries: Vec<_> = cache.into_iter().collect();
+    /// entries.sort_unstable();
+    ///
+    /// assert_eq!(entries, [(0, "a"), (1, "b")]);
+    /// ```
+    fn into_iter(self) -> Self::IntoIter {
+        IntoIter {
+            inner: self.table.into_iter(),
+            policy: self.exp_policy,
+        }
+    }
+}
+
+/// An owning iterator over the live entries of a `HashMap`.
+///
+/// This `struct` is created by the [`into_iter`] method on [`HashMap`], through [`IntoIterator`].
+///
+/// [`into_iter`]: IntoIterator::into_iter
+pub struct IntoIter<K, V, P>
+where
+    P: ExpirePolicy,
+{
+    inner: RawIntoIter<(K, V, Storage<P::Storage>)>,
+    policy: P,
+}
+
+impl<K, V, P> Iterator for IntoIter<K, V, P>
+where
+    P: ExpirePolicy,
+{
+    type Item = (K, V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let (k, v, s) = self.inner.next()?;
+
+            if !self.policy.is_expired(s.entry_id, &s.storage) && !s.is_removed() {
+                return Some((k, v));
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod test_map {
     use super::{Entry, HashMap};
@@ -2073,6 +2350,12 @@ mod test_map {
     impl MockPolicy {
         fn new() -> Self {
             Self {}
+        }
+    }
+
+    impl Default for MockPolicy {
+        fn default() -> Self {
+            Self::new()
         }
     }
 
@@ -2113,6 +2396,7 @@ mod test_map {
     struct ExpiringPolicy {
         expired: Cell<bool>,
         evict_on_access: Cell<bool>,
+        accesses: Cell<usize>,
     }
 
     impl ExpiringPolicy {
@@ -2120,6 +2404,7 @@ mod test_map {
             Self {
                 expired: Cell::new(false),
                 evict_on_access: Cell::new(false),
+                accesses: Cell::new(0),
             }
         }
     }
@@ -2137,6 +2422,8 @@ mod test_map {
         }
 
         fn on_access(&self, entry: EntryId, _: &Self::Storage) -> Command {
+            self.accesses.set(self.accesses.get() + 1);
+
             if self.expired.get() || self.evict_on_access.get() {
                 Command::Remove(entry)
             } else {
@@ -2248,6 +2535,81 @@ mod test_map {
         // a mutable probe reaps it, even though it is looking for something else entirely.
         assert_eq!(map.get_mut(&1), None);
         assert_eq!(map.len_approx(), 0);
+    }
+
+    /// Comparing two caches must not count as using them. `iter` already reports nothing to
+    /// the policy, and equality is built out of iteration, so it has to stay that way -- under
+    /// `TTIPolicy` a single `==` would otherwise refresh every entry on both sides.
+    #[test]
+    fn test_eq_does_not_fire_access_events() {
+        let mut a = HashMap::new(ExpiringPolicy::new());
+        let mut b = HashMap::new(ExpiringPolicy::new());
+
+        a.insert(0, "a", ());
+        b.insert(0, "a", ());
+        a.exp_policy.accesses.set(0);
+        b.exp_policy.accesses.set(0);
+
+        assert_eq!(a, b);
+
+        assert_eq!(a.exp_policy.accesses.get(), 0);
+        assert_eq!(b.exp_policy.accesses.get(), 0);
+
+        // a plain read still does report itself.
+        assert_eq!(a.get(&0), Some(&"a"));
+        assert_eq!(a.exp_policy.accesses.get(), 1);
+    }
+
+    #[test]
+    fn test_eq_ignores_expired_entries() {
+        let mut a = HashMap::new(ExpiringPolicy::new());
+        let b = HashMap::new(ExpiringPolicy::new());
+
+        a.insert(0, "a", ());
+        assert_ne!(a, b);
+
+        a.exp_policy.expired.set(true);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn test_into_iter_skips_expired_entries() {
+        let mut map = HashMap::new(ExpiringPolicy::new());
+
+        map.insert(0, "a", ());
+        map.insert(1, "b", ());
+
+        let mut entries: Vec<_> = (&map).into_iter().map(|(k, v)| (*k, *v)).collect();
+        entries.sort_unstable();
+        assert_eq!(entries, [(0, "a"), (1, "b")]);
+
+        map.exp_policy.expired.set(true);
+        assert_eq!(map.into_iter().count(), 0);
+    }
+
+    #[test]
+    fn test_extend_and_from_iter() {
+        let mut map = HashMap::new(ExpiringPolicy::new());
+        map.extend(vec![(0, "a", ()), (1, "b", ())]);
+
+        assert_eq!(map.len(), 2);
+        assert_eq!(map.get(&1), Some(&"b"));
+
+        let collected: HashMap<u32, &str, MockPolicy> =
+            vec![(0, "a", ()), (1, "b", ())].into_iter().collect();
+
+        assert_eq!(collected.len(), 2);
+    }
+
+    #[test]
+    fn test_debug_shows_live_entries_only() {
+        let mut map = HashMap::new(ExpiringPolicy::new());
+        map.insert(0, "a", ());
+
+        assert_eq!(format!("{:?}", map), r#"{0: "a"}"#);
+
+        map.exp_policy.expired.set(true);
+        assert_eq!(format!("{:?}", map), "{}");
     }
 
     #[test]
