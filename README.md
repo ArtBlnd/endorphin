@@ -23,6 +23,27 @@ fn main() {
 
 ```
 
+`HashSet` works the same way, with the expiration info riding along on `insert`.
+```rust
+use std::thread::sleep;
+use std::time::Duration;
+
+use endorphin::policy::TTLPolicy;
+use endorphin::HashSet;
+
+fn main() {
+    let mut cache = HashSet::new(TTLPolicy::new());
+
+    cache.insert("Still", Duration::from_secs(3));
+    cache.insert("Gonna", Duration::from_secs(1));
+
+    sleep(Duration::from_secs(1));
+
+    assert!(cache.contains(&"Still"));
+    assert!(!cache.contains(&"Gonna"));
+}
+```
+
 Currently, we are providing four pre-defined policies. 
 
  - `LazyFixedTTLPolicy` uses **Lazy Expiration** as other cache crates do, it expires items when you access entry after its TTL.
