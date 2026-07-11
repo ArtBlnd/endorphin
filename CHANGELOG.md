@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.0
+
+### Fixed
+
+- **Iterating a fully expired cache aborted the process.** Every iterator that skips expired
+  entries -- `Iter`, `IterMut`, `Drain`, and the set's `Difference` and `Intersection` -- recursed
+  once per skipped element. A whole batch expiring at once is the normal state of a TTL cache, so
+  `iter` on one overflowed the stack, and with it `len` and `is_empty`, which are built on `iter`.
+  They loop now. Reproduced at 200k entries; a regression test walks that path.
+
+### Breaking
+
+- `IterMut` yields `(&K, &mut V)` instead of `(&mut K, &mut V)`, and so does `&mut HashMap` when
+  iterated. A mutable key let safe code change an entry's hash, leaving it in a bucket it no
+  longer belongs to: still in the table, and unreachable forever. `std` and `hashbrown` hand the
+  key out shared for the same reason.
+
 ## 0.2.0
 
 A soundness release. Every version up to and including `0.1.9` carries undefined behaviour that

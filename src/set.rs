@@ -918,12 +918,14 @@ where
 {
     type Item = &'a T;
 
+    /// Skipping is a loop, not a recursion -- see [`map::Iter`].
     fn next(&mut self) -> Option<Self::Item> {
-        let elt = self.iter.next()?;
-        if self.other.contains(elt) {
-            self.next()
-        } else {
-            Some(elt)
+        loop {
+            let elt = self.iter.next()?;
+
+            if !self.other.contains(elt) {
+                return Some(elt);
+            }
         }
     }
 }
@@ -974,12 +976,14 @@ where
 {
     type Item = &'a T;
 
+    /// Skipping is a loop, not a recursion -- see [`map::Iter`].
     fn next(&mut self) -> Option<Self::Item> {
-        let elt = self.smaller.next()?;
-        if self.larger.contains(elt) {
-            Some(elt)
-        } else {
-            self.next()
+        loop {
+            let elt = self.smaller.next()?;
+
+            if self.larger.contains(elt) {
+                return Some(elt);
+            }
         }
     }
 }

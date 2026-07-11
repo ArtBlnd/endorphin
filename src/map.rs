@@ -1100,20 +1100,15 @@ where
 {
     type Item = (&'a K, &'a V);
 
+    /// Skipping is a loop, not a recursion: a whole batch of entries expiring at once is the
+    /// normal state of a TTL cache, and recursing once per skipped entry overflows the stack.
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some((r, s)) = self
-            .inner
-            .next()
-            .map(|v| unsafe { v.as_ref() })
-            .map(|(k, v, s)| ((k, v), s))
-        {
-            if !self.policy.is_expired(s.entry_id, &s.storage) & !s.is_removed() {
-                Some(r)
-            } else {
-                self.next()
+        loop {
+            let (k, v, s) = self.inner.next().map(|v| unsafe { v.as_ref() })?;
+
+            if !self.policy.is_expired(s.entry_id, &s.storage) && !s.is_removed() {
+                return Some((k, v));
             }
-        } else {
-            None
         }
     }
 }
@@ -1136,22 +1131,19 @@ impl<'a, K, V, P> Iterator for IterMut<'a, K, V, P>
 where
     P: ExpirePolicy,
 {
-    type Item = (&'a mut K, &'a mut V);
+    /// The key is handed out shared. Mutating it would change its hash, and the entry would
+    /// sit in a bucket it no longer belongs to -- present in the table, and unreachable.
+    type Item = (&'a K, &'a mut V);
 
+    /// Skipping is a loop, not a recursion: a whole batch of entries expiring at once is the
+    /// normal state of a TTL cache, and recursing once per skipped entry overflows the stack.
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some((r, s)) = self
-            .inner
-            .next()
-            .map(|v| unsafe { v.as_mut() })
-            .map(|(k, v, s)| ((k, v), s))
-        {
-            if !self.policy.is_expired(s.entry_id, &s.storage) & !s.is_removed() {
-                Some(r)
-            } else {
-                self.next()
+        loop {
+            let (k, v, s) = self.inner.next().map(|v| unsafe { v.as_mut() })?;
+
+            if !self.policy.is_expired(s.entry_id, &s.storage) && !s.is_removed() {
+                return Some((&*k, v));
             }
-        } else {
-            None
         }
     }
 }
@@ -1244,15 +1236,15 @@ where
 {
     type Item = (K, V);
 
+    /// Skipping is a loop, not a recursion: a whole batch of entries expiring at once is the
+    /// normal state of a TTL cache, and recursing once per skipped entry overflows the stack.
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some((r, s)) = self.inner.next().map(|(k, v, s)| ((k, v), s)) {
-            if !self.policy.is_expired(s.entry_id, &s.storage) & !s.is_removed() {
-                Some(r)
-            } else {
-                self.next()
+        loop {
+            let (k, v, s) = self.inner.next()?;
+
+            if !self.policy.is_expired(s.entry_id, &s.storage) && !s.is_removed() {
+                return Some((k, v));
             }
-        } else {
-            None
         }
     }
 }
@@ -2266,7 +2258,7 @@ impl<'a, K, V, P, H> IntoIterator for &'a mut HashMap<K, V, P, H>
 where
     P: ExpirePolicy,
 {
-    type Item = (&'a mut K, &'a mut V);
+    type Item = (&'a K, &'a mut V);
     type IntoIter = IterMut<'a, K, V, P>;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -2610,6 +2602,26 @@ mod test_map {
 
         map.exp_policy.expired.set(true);
         assert_eq!(format!("{:?}", map), "{}");
+    }
+
+    /// `iter_mut` hands the key out shared. Mutating it would change its hash and strand the
+    /// entry in a bucket it no longer belongs to -- the compiler rejects that now, so this only
+    /// has to pin down that the *value* is still reachable mutably.
+    #[test]
+    fn test_iter_mut_yields_shared_keys() {
+        let mut map = HashMap::new(MockPolicy::new());
+
+        map.insert(0, 1, ());
+        map.insert(1, 2, ());
+
+        for (_k, v) in map.iter_mut() {
+            *v *= 10;
+        }
+
+        let mut entries: Vec<_> = map.iter().map(|(k, v)| (*k, *v)).collect();
+        entries.sort_unstable();
+
+        assert_eq!(entries, [(0, 10), (1, 20)]);
     }
 
     #[test]
