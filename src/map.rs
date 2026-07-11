@@ -195,6 +195,22 @@ where
         self.table.insert_no_grow(hash, v)
     }
 
+    /// Acts on what the policy asked for, marking every expired entry as removed and queueing
+    /// it for the next mutable operation to reap.
+    ///
+    /// # Aliasing
+    ///
+    /// Every entry is reachable through two live handles: its bucket in [`Self::table`], and
+    /// the copy of that bucket parked in [`Self::exp_bucket_table`]. This method marks entries
+    /// through the *second* one, and `Storage` is interior-mutable, so the mark lands even
+    /// though the reference is shared.
+    ///
+    /// A reference derived from a bucket therefore dies the moment `handle_status` is called,
+    /// and so does one derived from anything else that writes through a bucket, such as
+    /// `RawTable::replace_bucket_with`. Read what you need before the call, or re-derive from
+    /// the `Bucket` afterwards -- never carry a reference across it. The borrow checker cannot
+    /// see any of this, because both handles are raw pointers; only Miri can, which is why CI
+    /// runs it.
     #[inline]
     fn handle_status(&self, status: Command) {
         let mut removed = Vec::new();
@@ -271,6 +287,33 @@ where
         (bucket, old_v)
     }
 
+    /// Looks up a live entry and hands back its raw bucket, firing the access event.
+    ///
+    /// Expired and removed entries are reported as absent, exactly like [`HashMap::get`].
+    /// The bucket carries no lifetime, so the caller's borrow of the map ends here. That is
+    /// what lets `HashSet::get_or_insert` fall through to [`HashMap::raw_insert`] on a miss.
+    pub(crate) fn raw_get<Q: ?Sized>(&self, k: &Q) -> Option<Bucket<(K, V, Storage<P::Storage>)>>
+    where
+        K: Borrow<Q>,
+        Q: Hash + Eq,
+    {
+        let hash = make_hash::<K, Q, H>(&self.hash_builder, k);
+        let bucket = self.table.find(hash, equivalent_key(k))?;
+
+        let s = unsafe { &bucket.as_ref().2 };
+        self.handle_status(self.exp_policy.on_access(s.entry_id, &s.storage));
+
+        // `handle_status` may have marked this very entry through the bucket kept in
+        // `exp_bucket_table`, which invalidates any reference derived before the call.
+        // Re-derive from the bucket instead of reusing `s`.
+        let s = unsafe { &bucket.as_ref().2 };
+        if self.exp_policy.is_expired(s.entry_id, &s.storage) || unlikely(s.is_removed()) {
+            None
+        } else {
+            Some(bucket)
+        }
+    }
+
     /// Returns a reference to the value corresponding to the key.
     ///
     /// If the entry is expired, returns `None`
@@ -304,9 +347,14 @@ where
             None => return None,
         };
 
-        // fire on_insert event.
-        let (_, v, s) = unsafe { bucket.as_mut() };
+        // fire on_access event.
+        let s = unsafe { &bucket.as_ref().2 };
         self.handle_status(self.exp_policy.on_access(s.entry_id, &s.storage));
+
+        // `handle_status` writes through the bucket that `exp_bucket_table` keeps for this
+        // entry, which invalidates every reference derived from the bucket before the call.
+        // Re-derive instead of reusing them.
+        let (_, v, s) = unsafe { bucket.as_mut() };
 
         // don't give access to entry if entry expired.
         if self.exp_policy.is_expired(s.entry_id, &s.storage) || unlikely(s.is_removed()) {
@@ -350,9 +398,14 @@ where
             None => return None,
         };
 
-        // fire on_insert event.
-        let (k, v, s) = unsafe { bucket.as_mut() };
+        // fire on_access event.
+        let s = unsafe { &bucket.as_ref().2 };
         self.handle_status(self.exp_policy.on_access(s.entry_id, &s.storage));
+
+        // `handle_status` writes through the bucket that `exp_bucket_table` keeps for this
+        // entry, which invalidates every reference derived from the bucket before the call.
+        // Re-derive instead of reusing them.
+        let (k, v, s) = unsafe { bucket.as_mut() };
 
         // don't give access to entry if entry expired.
         if self.exp_policy.is_expired(s.entry_id, &s.storage) || unlikely(s.is_removed()) {
@@ -365,6 +418,10 @@ where
     /// Returns a mutable reference to the value corresponding to the key.
     ///
     /// If the entry is expired, returns `None`
+    ///
+    /// Unlike the shared accessors, this one takes `&mut self`. It hands out a `&mut V` into
+    /// the map, and taking `&self` would let safe code hold two of them for the same key at
+    /// once.
     ///
     /// # Example
     ///
@@ -386,7 +443,7 @@ where
     /// assert!(cache.get(&0).is_none());
     /// ```
     #[inline]
-    pub fn get_mut<Q: ?Sized>(&self, k: &Q) -> Option<&mut V>
+    pub fn get_mut<Q: ?Sized>(&mut self, k: &Q) -> Option<&mut V>
     where
         K: Borrow<Q>,
         Q: Hash + Eq,
@@ -397,9 +454,14 @@ where
             None => return None,
         };
 
-        // fire on_insert event.
-        let (_, v, s) = unsafe { bucket.as_mut() };
+        // fire on_access event.
+        let s = unsafe { &bucket.as_ref().2 };
         self.handle_status(self.exp_policy.on_access(s.entry_id, &s.storage));
+
+        // `handle_status` writes through the bucket that `exp_bucket_table` keeps for this
+        // entry, which invalidates every reference derived from the bucket before the call.
+        // Re-derive instead of reusing them.
+        let (_, v, s) = unsafe { bucket.as_mut() };
 
         // don't give access to entry if entry expired.
         if self.exp_policy.is_expired(s.entry_id, &s.storage) || unlikely(s.is_removed()) {
@@ -1551,9 +1613,13 @@ where
     /// }
     /// ```
     pub fn get(&self) -> &V {
-        let (_, v, s) = unsafe { self.elem.as_mut() };
+        let s = unsafe { &self.elem.as_ref().2 };
         self.table
             .handle_status(self.table.exp_policy.on_access(s.entry_id, &s.storage));
+
+        // `handle_status` writes through the bucket that `exp_bucket_table` keeps for this
+        // entry, which invalidates every reference derived from `self.elem` before the call.
+        let (_, v, _) = unsafe { self.elem.as_mut() };
         v
     }
 
@@ -1585,9 +1651,13 @@ where
     /// assert_eq!(cache.get(&"a"), Some(&222));
     /// ```
     pub fn get_mut(&mut self) -> &mut V {
-        let (_, v, s) = unsafe { self.elem.as_mut() };
+        let s = unsafe { &self.elem.as_ref().2 };
         self.table
             .handle_status(self.table.exp_policy.on_access(s.entry_id, &s.storage));
+
+        // `handle_status` writes through the bucket that `exp_bucket_table` keeps for this
+        // entry, which invalidates every reference derived from `self.elem` before the call.
+        let (_, v, _) = unsafe { self.elem.as_mut() };
         v
     }
 
@@ -1619,9 +1689,13 @@ where
     /// assert_eq!(cache.get(&"a"), Some(&111));
     /// ```
     pub fn into_mut(self) -> &'a mut V {
-        let (_, v, s) = unsafe { self.elem.as_mut() };
+        let s = unsafe { &self.elem.as_ref().2 };
         self.table
             .handle_status(self.table.exp_policy.on_access(s.entry_id, &s.storage));
+
+        // `handle_status` writes through the bucket that `exp_bucket_table` keeps for this
+        // entry, which invalidates every reference derived from `self.elem` before the call.
+        let (_, v, _) = unsafe { self.elem.as_mut() };
         v
     }
 
@@ -1646,8 +1720,6 @@ where
     /// assert_eq!(cache.get(&"a"), Some(&200));
     /// ```
     pub fn insert(&mut self, value: V, init: P::Info) -> V {
-        let k = unsafe { &self.elem.as_ref().0 };
-
         let s = self.table.exp_policy.init_storage(init);
         let storage = Storage::new(s, self.table.exp_bucket_table.acquire_slot());
 
@@ -1657,11 +1729,11 @@ where
                 .on_insert(storage.entry_id, &storage.storage),
         );
 
-        let (_, old_v, old_s) = self
-            .table
-            .table
-            .get_mut(self.hash, equivalent_key(k))
-            .unwrap();
+        // The entry's bucket is already known. Looking it back up through `get_mut` would pass
+        // a reference *into* the table as the lookup key while the lookup takes the table
+        // mutably, so the key reference and the returned entry alias.
+        let (_, old_v, old_s) = unsafe { self.elem.as_mut() };
+
         let bucket = self.table.exp_bucket_table.get(old_s.entry_id).unwrap();
 
         self.table.exp_bucket_table.set_bucket(old_s.entry_id, None);
@@ -1731,13 +1803,13 @@ where
     /// }
     /// ```
     pub fn replace_entry(self, value: V) -> (K, V) {
-        let entry = unsafe { self.elem.as_mut() };
+        let s = unsafe { &self.elem.as_ref().2 };
+        self.table
+            .handle_status(self.table.exp_policy.on_access(s.entry_id, &s.storage));
 
-        self.table.handle_status(
-            self.table
-                .exp_policy
-                .on_access(entry.2.entry_id, &entry.2.storage),
-        );
+        // `handle_status` writes through the bucket that `exp_bucket_table` keeps for this
+        // entry, which invalidates every reference derived from `self.elem` before the call.
+        let entry = unsafe { self.elem.as_mut() };
 
         let old_key = mem::replace(&mut entry.0, self.key.unwrap());
         let old_value = mem::replace(&mut entry.1, value);
@@ -1775,12 +1847,13 @@ where
     /// }
     /// ```
     pub fn replace_key(self) -> K {
+        let s = unsafe { &self.elem.as_ref().2 };
+        self.table
+            .handle_status(self.table.exp_policy.on_access(s.entry_id, &s.storage));
+
+        // `handle_status` writes through the bucket that `exp_bucket_table` keeps for this
+        // entry, which invalidates every reference derived from `self.elem` before the call.
         let entry = unsafe { self.elem.as_mut() };
-        self.table.handle_status(
-            self.table
-                .exp_policy
-                .on_access(entry.2.entry_id, &entry.2.storage),
-        );
 
         mem::replace(&mut entry.0, self.key.unwrap())
     }
@@ -1838,9 +1911,12 @@ where
             let mut spare_key = None;
 
             let elem = self.elem.clone();
-            let s = &mut elem.clone().as_mut().2;
 
-            self.table.exp_bucket_table.set_bucket(s.entry_id, None);
+            // `replace_bucket_with` writes through the bucket, and drops it outright when `f`
+            // returns `None`. Copy the id out instead of holding a reference across the call.
+            let entry_id = elem.as_ref().2.entry_id;
+
+            self.table.exp_bucket_table.set_bucket(entry_id, None);
 
             self.table
                 .table
@@ -1853,21 +1929,27 @@ where
                     }
                 });
 
-            self.table
-                .exp_bucket_table
-                .set_bucket(s.entry_id, Some(elem.clone()));
-            self.table
-                .handle_status(self.table.exp_policy.on_access(s.entry_id, &s.storage));
-
             if let Some(key) = spare_key {
-                Entry::Vacant(VacantEntry {
+                // `f` dropped the entry, so its bucket is gone. Registering it back would leave
+                // a dangling bucket in `exp_bucket_table` for the expiration path to walk into.
+                self.table.exp_bucket_table.release_slot(entry_id);
+
+                return Entry::Vacant(VacantEntry {
                     hash: self.hash,
                     key,
                     table: self.table,
-                })
-            } else {
-                Entry::Occupied(self)
+                });
             }
+
+            self.table
+                .exp_bucket_table
+                .set_bucket(entry_id, Some(elem.clone()));
+
+            let s = &elem.as_ref().2;
+            self.table
+                .handle_status(self.table.exp_policy.on_access(s.entry_id, &s.storage));
+
+            Entry::Occupied(self)
         }
     }
 }
@@ -1977,9 +2059,11 @@ where
 
 #[cfg(test)]
 mod test_map {
-    use super::HashMap;
+    use super::{Entry, HashMap};
     use crate::policy::{Command, ExpirePolicy};
     use crate::EntryId;
+
+    use std::cell::Cell;
 
     struct MockPolicy {}
     impl MockPolicy {
@@ -2014,6 +2098,133 @@ mod test_map {
         fn on_resize(&self) -> Command {
             Command::Noop
         }
+    }
+
+    /// `MockPolicy` answers every event with `Command::Noop`, which makes `handle_status`
+    /// return before it touches a single entry. That leaves the whole expiration path -- the
+    /// one where the policy hands back `Command::Remove` and the map writes through the
+    /// bucket it keeps in `exp_bucket_table` -- untested, and it is exactly the path the
+    /// pre-defined policies take. This policy expires on demand so the tests below can walk
+    /// it, under Miri included.
+    struct ExpiringPolicy {
+        expired: Cell<bool>,
+        evict_on_access: Cell<bool>,
+    }
+
+    impl ExpiringPolicy {
+        fn new() -> Self {
+            Self {
+                expired: Cell::new(false),
+                evict_on_access: Cell::new(false),
+            }
+        }
+    }
+
+    impl ExpirePolicy for ExpiringPolicy {
+        type Info = ();
+        type Storage = ();
+
+        fn init_storage(&self, _: Self::Info) -> Self::Storage {}
+
+        fn clear(&mut self) {}
+
+        fn is_expired(&self, _: EntryId, _: &Self::Storage) -> bool {
+            self.expired.get()
+        }
+
+        fn on_access(&self, entry: EntryId, _: &Self::Storage) -> Command {
+            if self.expired.get() || self.evict_on_access.get() {
+                Command::Remove(entry)
+            } else {
+                Command::Noop
+            }
+        }
+
+        fn on_insert(&self, _: EntryId, _: &Self::Storage) -> Command {
+            Command::Noop
+        }
+
+        fn on_resize(&self) -> Command {
+            Command::Noop
+        }
+    }
+
+    #[test]
+    fn test_get_on_expired_entry() {
+        let mut map = HashMap::new(ExpiringPolicy::new());
+
+        map.insert(0, "a", ());
+        assert_eq!(map.get(&0), Some(&"a"));
+
+        map.exp_policy.expired.set(true);
+        assert_eq!(map.get(&0), None);
+        assert_eq!(map.get_key_value(&0), None);
+        assert_eq!(map.get_mut(&0), None);
+        assert!(!map.contains_key(&0));
+    }
+
+    #[test]
+    fn test_occupied_entry_on_expired_entry() {
+        let mut map = HashMap::new(ExpiringPolicy::new());
+
+        map.insert(0, "a", ());
+        map.exp_policy.expired.set(true);
+
+        // an expired entry is absent, so `entry` must hand back a vacant slot.
+        match map.entry(0) {
+            Entry::Occupied(_) => panic!("expired entry must not be occupied"),
+            Entry::Vacant(entry) => assert_eq!(entry.key(), &0),
+        }
+    }
+
+    /// `handle_status` only writes when the policy hands back `Command::Remove`, and `entry`
+    /// only hands back an `Occupied` slot while `is_expired` is false. Evicting purely on
+    /// access is what puts both at once: a live, occupied entry whose bucket gets written
+    /// through `exp_bucket_table` the moment an accessor fires `on_access`. Every reference an
+    /// accessor hands back has to survive that write.
+    #[test]
+    fn test_occupied_entry_accessors_fire_expiration() {
+        let mut map = HashMap::new(ExpiringPolicy::new());
+        map.exp_policy.evict_on_access.set(true);
+
+        macro_rules! occupied {
+            () => {{
+                map.insert(0, "a", ());
+                match map.entry(0) {
+                    Entry::Occupied(entry) => entry,
+                    Entry::Vacant(_) => panic!("entry must be occupied"),
+                }
+            }};
+        }
+
+        assert_eq!(occupied!().get(), &"a");
+        assert_eq!(occupied!().get_mut(), &mut "a");
+        assert_eq!(occupied!().into_mut(), &mut "a");
+        assert_eq!(occupied!().replace_entry("b"), (0, "a"));
+        assert_eq!(occupied!().replace_key(), 0);
+    }
+
+    /// `and_replace_entry_with` drops the entry when the closure returns `None`, which erases
+    /// its bucket. The slot it leaves behind must not keep pointing at that erased bucket.
+    #[test]
+    fn test_replace_entry_with_removal_releases_slot() {
+        let mut map = HashMap::new(ExpiringPolicy::new());
+
+        map.insert(0, "a", ());
+        map.entry(0).and_replace_entry_with(|_, _| None);
+
+        assert!(!map.contains_key(&0));
+        assert_eq!(map.len(), 0);
+
+        // the expiration path walks every bucket registered in `exp_bucket_table`, so a stale
+        // one left behind above would be followed from here.
+        map.insert(1, "b", ());
+        map.exp_policy.expired.set(true);
+        assert!(!map.contains_key(&1));
+
+        map.exp_policy.expired.set(false);
+        map.insert(2, "c", ());
+        assert_eq!(map.get(&2), Some(&"c"));
     }
 
     #[test]
@@ -2079,13 +2290,14 @@ mod test_map {
         assert!(map.insert(0, 0, ()).is_none());
         assert!(map.insert(1, 1, ()).is_none());
 
+        // `get_mut` takes `&mut self`, so these two cannot overlap. That is the point: while
+        // it took `&self`, safe code could hold `v0` and `v1` for the *same* key at once.
         let v0 = map.get_mut(&0).unwrap();
-        let v1 = map.get_mut(&1).unwrap();
-
         assert_eq!(v0, &0);
-        assert_eq!(v1, &1);
-
         *v0 = 10;
+
+        let v1 = map.get_mut(&1).unwrap();
+        assert_eq!(v1, &1);
         *v1 = 20;
 
         assert_eq!(map.get(&0).unwrap(), &10);

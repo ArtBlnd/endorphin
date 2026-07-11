@@ -39,3 +39,27 @@ jobs:
         with:
           command: test
           args: --all-targets --all-features
+
+  # `HashMap` keeps two live handles to every entry -- the bucket in the raw table and the one
+  # in `exp_bucket_table` -- and `Storage` is interior-mutable, so an expiring policy writes
+  # through a shared reference. `cargo test` cannot see a reference invalidated that way; only
+  # Miri can. Without this job the aliasing rules the map depends on are unchecked.
+  miri:
+    name: cargo miri test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          override: true
+          components: miri
+      - name: Stacked Borrows
+        run: cargo miri test --lib
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation
+      - name: Tree Borrows
+        run: cargo miri test --lib
+        env:
+          MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-tree-borrows
