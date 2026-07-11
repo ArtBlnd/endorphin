@@ -421,7 +421,8 @@ where
     ///
     /// Unlike the shared accessors, this one takes `&mut self`. It hands out a `&mut V` into
     /// the map, and taking `&self` would let safe code hold two of them for the same key at
-    /// once.
+    /// once. Having `&mut self` is also what lets it reap a batch of expired entries on the
+    /// way, like every other mutable operation does.
     ///
     /// # Example
     ///
@@ -448,6 +449,9 @@ where
         K: Borrow<Q>,
         Q: Hash + Eq,
     {
+        // try to process single backlog when on every mutable state.
+        self.process_single_backlog();
+
         let hash = make_hash::<K, Q, H>(&self.hash_builder, k);
         let bucket = match self.table.find(hash, equivalent_key(k)) {
             Some(bucket) => bucket,
@@ -2225,6 +2229,25 @@ mod test_map {
         map.exp_policy.expired.set(false);
         map.insert(2, "c", ());
         assert_eq!(map.get(&2), Some(&"c"));
+    }
+
+    /// `get_mut` takes `&mut self`, so it can reap a batch of expired entries the way every
+    /// other mutable operation does. While it took `&self` it could not, and expired entries
+    /// only left the table once some *other* mutable call came along.
+    #[test]
+    fn test_get_mut_reaps_expired_entries() {
+        let mut map = HashMap::new(ExpiringPolicy::new());
+
+        map.insert(0, "a", ());
+        map.exp_policy.expired.set(true);
+
+        // the shared read marks the entry and queues it, but cannot reap it.
+        assert_eq!(map.get(&0), None);
+        assert_eq!(map.len_approx(), 1);
+
+        // a mutable probe reaps it, even though it is looking for something else entirely.
+        assert_eq!(map.get_mut(&1), None);
+        assert_eq!(map.len_approx(), 0);
     }
 
     #[test]
